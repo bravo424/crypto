@@ -78,12 +78,16 @@ NORDERSPERHOUR:    int   = 3      # max new entries per symbol per rolling hour
 MAX_OPEN_POSITIONS: int  = 3      # max concurrent open positions across all symbols
 LEVERAGE:          int   = 10
 TIME_IN_FORCE:     str   = "PostOnly"
+HTF_INTERVAL:      str   = "15"     # higher-timeframe candles for trend filter
+HTF_EMA_PERIOD:    int   = 20       # EMA period on HTF
+MIN_ATR_PCT:       float = 0.002    # skip symbol if ATR / mark < this (0.2%)
 
 
 def load_params() -> None:
     global VMULT, VLOOKBACK, ATR_PERIOD, TRAIL_OFFSET_ATR, TP_ATR_MULT
     global SL_ATR_MULT, STALE_MULT, MAX_ORDER_AGE_MIN, MAXRISKPCT
     global NOTIONAL_CAP_USDT, NORDERSPERHOUR, MAX_OPEN_POSITIONS, LEVERAGE, TIME_IN_FORCE
+    global HTF_EMA_PERIOD, MIN_ATR_PCT
     path = HERE / "params.json"
     with path.open(encoding="utf-8") as fh:
         p = json.load(fh)
@@ -101,6 +105,8 @@ def load_params() -> None:
     MAX_OPEN_POSITIONS = int(p.get("max_open_positions",   MAX_OPEN_POSITIONS))
     LEVERAGE           = int(p.get("leverage",             LEVERAGE))
     TIME_IN_FORCE      = str(p.get("time_in_force",        TIME_IN_FORCE))
+    HTF_EMA_PERIOD     = int(p.get("htf_ema_period",       HTF_EMA_PERIOD))
+    MIN_ATR_PCT        = float(p.get("min_atr_pct",        MIN_ATR_PCT))
 
 
 # ── symbols ───────────────────────────────────────────────────────────────────
@@ -177,6 +183,22 @@ def check_369(closes: list[float]) -> str | None:
     if price > ema3 > ema6 > ema9:
         return "Buy"
     if price < ema3 < ema6 < ema9:
+        return "Sell"
+    return None
+
+
+def check_htf_trend(session: HTTP, symbol: str) -> str | None:
+    """15-min EMA trend gate: returns 'Buy', 'Sell', or None (neutral)."""
+    resp = session.get_kline(category="linear", symbol=symbol,
+                             interval=HTF_INTERVAL, limit=HTF_EMA_PERIOD + 5)
+    candles = resp["result"]["list"]
+    if len(candles) < HTF_EMA_PERIOD + 1:
+        return None
+    closes = [float(c[4]) for c in reversed(candles[1:])]
+    ema    = _ema(closes, HTF_EMA_PERIOD)
+    if closes[-1] > ema:
+        return "Buy"
+    if closes[-1] < ema:
         return "Sell"
     return None
 
@@ -385,6 +407,10 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
     sl_dist = SL_ATR_MULT * atr
     if sl_dist <= 0:
         return None
+    if MIN_ATR_PCT > 0 and atr / mark < MIN_ATR_PCT:
+        LOGGER.warning("Skipping %s: ATR %.4f%% < minimum %.4f%%",
+                       symbol, atr / mark * 100, MIN_ATR_PCT * 100)
+        return None
 
     try:
         equity = get_wallet_equity(session)
@@ -393,7 +419,9 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
         return None
 
     limit_px = _trail_price(side, mark, atr, tick_size)
-    tp_price, sl_price = calc_tp_sl(side, float(limit_px), atr, tick_size)
+    # TP/SL must be relative to mark price — Bybit validates them against mark at
+    # submission time, not against the (future) fill price of the limit order.
+    tp_price, sl_price = calc_tp_sl(side, mark, atr, tick_size)
     qty_str  = calc_qty(equity, sl_dist, qty_step, min_qty, float(limit_px))
 
     if float(qty_str) * float(limit_px) < min_not:
@@ -764,7 +792,18 @@ def main() -> None:
                 if side is None:
                     continue
 
-                LOGGER.info("Signal → %s %s  atr=%.4f", side, symbol, atr)
+                # 15-min trend alignment — only trade with the HTF direction
+                try:
+                    htf_side = check_htf_trend(session, symbol)
+                except Exception as err:
+                    LOGGER.warning("HTF trend check failed %s: %s", symbol, err)
+                    htf_side = None
+                if htf_side is not None and htf_side != side:
+                    LOGGER.debug("HTF trend (%s) conflicts 1m signal (%s) for %s — skipped",
+                                 htf_side, side, symbol)
+                    continue
+
+                LOGGER.info("Signal → %s %s  atr=%.4f  htf=%s", side, symbol, atr, htf_side)
                 entry_info = _place_entry(
                     session, symbol, side, atr,
                     settings.dry_run, lev_override, now,
