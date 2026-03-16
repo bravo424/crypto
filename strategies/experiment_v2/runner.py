@@ -101,7 +101,7 @@ def load_params(exchange: str = "bybit") -> None:
     params["exchanges"][exchange] on top of base values."""
     global EMA_PERIOD, ATR_PERIOD, VMULT, VLOOKBACK, WICK_THRESH
     global SLATRMULT, TPR, MAXRISKPCT, NORDERSPERHOUR, NOTIONAL_CAP_USDT
-    global LEVERAGE, TIME_IN_FORCE, BITHUMB_TICK_EXIT
+    global LEVERAGE, TIME_IN_FORCE, BITHUMB_TICK_EXIT, MIN_BARS_BETWEEN_TRADES
     path = HERE / "params.json"
     with path.open(encoding="utf-8") as fh:
         p = json.load(fh)
@@ -120,6 +120,7 @@ def load_params(exchange: str = "bybit") -> None:
     LEVERAGE          = int(p.get("leverage",           LEVERAGE))
     TIME_IN_FORCE     = str(p.get("time_in_force",      TIME_IN_FORCE))
     BITHUMB_TICK_EXIT = int(p.get("bithumb_tick_exit",  BITHUMB_TICK_EXIT))
+    MIN_BARS_BETWEEN_TRADES = int(p.get("min_bars_between_trades", MIN_BARS_BETWEEN_TRADES))
 
 
 # ── symbols ───────────────────────────────────────────────────────────────────

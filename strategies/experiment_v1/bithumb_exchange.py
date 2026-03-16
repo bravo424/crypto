@@ -124,10 +124,20 @@ class BithumbSession:
 
     def get_kline(self, category=None, symbol: str = "", interval: str = "5",
                   limit: int = 3, **_kw) -> dict:
-        """Fetch OHLCV candles in Bybit list format with USDT-normalised prices."""
+        """Fetch OHLCV candles in Bybit list format with USDT-normalised prices.
+
+        Bybit uses interval="60" for 1-hour candles, but Bithumb requires the
+        endpoint /candles/hours/1 (not /candles/minutes/60 which is unsupported).
+        We detect any multiple-of-60 interval and route accordingly.
+        """
         market = self.to_market(symbol)
+        interval_int = int(interval)
+        if interval_int >= 60 and interval_int % 60 == 0:
+            path = f"candles/hours/{interval_int // 60}"
+        else:
+            path = f"candles/minutes/{interval}"
         resp = requests.get(
-            f"{BITHUMB_BASE}/candles/minutes/{interval}",
+            f"{BITHUMB_BASE}/{path}",
             params={"market": market, "count": limit},
             timeout=10,
         )
