@@ -35,6 +35,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
+import yaml
+
 from dotenv import load_dotenv
 from pybit.exceptions import InvalidRequestError
 from pybit.unified_trading import HTTP
@@ -54,8 +56,12 @@ from bithumb_exchange import BithumbSession  # noqa: E402
 
 STATE_FILE = Path("data/experiment_v2_state.json")
 
-CHECK_INTERVAL  = 60      # seconds between signal checks
+CHECK_INTERVAL  = 60      # seconds between signal checks (overridden by trading_frequency.yaml)
 UPDATE_INTERVAL = 1800    # 30 minutes between position-update Telegram alerts
+
+# ── frequency globals (hot-reloaded from trading_frequency.yaml) ─────────────
+MIN_BARS_BETWEEN_TRADES: int = 3   # 1H bars to wait after a trade before re-entering
+MAX_OPEN_POSITIONS:      int = 3   # max concurrent open positions across all symbols
 
 # ── mutable globals (hot-reloaded from params.json) ──────────────────────────
 EMA_PERIOD:        int   = 50
@@ -71,6 +77,23 @@ NOTIONAL_CAP_USDT: float = 500.0
 LEVERAGE:          int   = 5
 TIME_IN_FORCE:     str   = "PostOnly"
 BITHUMB_TICK_EXIT: int   = 0   # 0 = disabled; >0 = exit at ±N KRW ticks from entry
+
+
+def load_frequency_config(exchange: str = "bybit") -> None:
+    """Read trading_frequency.yaml; apply optional per-exchange overrides.
+    Hot-reloaded every tick so changes take effect without restarting."""
+    global NORDERSPERHOUR, MIN_BARS_BETWEEN_TRADES, MAX_OPEN_POSITIONS, CHECK_INTERVAL
+    path = HERE / "trading_frequency.yaml"
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+    overrides = cfg.get("exchanges", {}).get(exchange, {})
+    cfg = {**cfg, **overrides}
+    NORDERSPERHOUR          = int(cfg.get("nordersperhour",          NORDERSPERHOUR))
+    MIN_BARS_BETWEEN_TRADES = int(cfg.get("min_bars_between_trades", MIN_BARS_BETWEEN_TRADES))
+    MAX_OPEN_POSITIONS      = int(cfg.get("max_open_positions",      MAX_OPEN_POSITIONS))
+    CHECK_INTERVAL          = int(cfg.get("check_interval_seconds",  CHECK_INTERVAL))
 
 
 def load_params(exchange: str = "bybit") -> None:
@@ -363,13 +386,41 @@ def calc_qty(equity: float, risk_distance: float, qty_step: str,
 
 # ── frequency guard ───────────────────────────────────────────────────────────
 
-def _check_frequency(state: dict, symbol: str, now: datetime) -> bool:
-    """Return True if we are allowed to open a new position (frequency not exceeded)."""
+def _check_frequency(state: dict, symbol: str, now: datetime,
+                     live_positions: dict | None = None) -> bool:
+    """Return True if all frequency constraints allow a new position.
+
+    Checks (in order):
+      1. nordersperhour  — rolling 1-hour entry count per symbol.
+      2. min_bars_between_trades — hours since last entry on this symbol.
+      3. max_open_positions — total concurrent positions across all symbols.
+    """
+    # 1. rolling hourly cap
     window_start = now - timedelta(hours=1)
     times = state["signal_times"].get(symbol, [])
     recent = [t for t in times if datetime.fromisoformat(t).replace(tzinfo=UTC) >= window_start]
     state["signal_times"][symbol] = recent
-    return len(recent) < NORDERSPERHOUR
+    if len(recent) >= NORDERSPERHOUR:
+        return False
+
+    # 2. minimum bars (hours) since last entry on this symbol
+    if MIN_BARS_BETWEEN_TRADES > 0:
+        all_times = state["signal_times"].get(symbol, [])
+        if all_times:
+            last_entry = max(
+                datetime.fromisoformat(t).replace(tzinfo=UTC) for t in all_times
+            )
+            hours_since = (now - last_entry).total_seconds() / 3600
+            if hours_since < MIN_BARS_BETWEEN_TRADES:
+                return False
+
+    # 3. global open-position cap
+    if MAX_OPEN_POSITIONS > 0 and live_positions is not None:
+        total_open = len(live_positions) + len(state.get("pending_orders", {}))
+        if total_open >= MAX_OPEN_POSITIONS:
+            return False
+
+    return True
 
 
 def _record_signal_time(state: dict, symbol: str, now: datetime) -> None:
@@ -670,6 +721,7 @@ def alert_update(alerter: TelegramAlerter | None, positions: dict[str, dict],
 def main() -> None:
     load_dotenv()
     load_params()  # pre-parse defaults; reloaded with exchange after args parsed
+    load_frequency_config()  # pre-parse frequency defaults
 
     parser = argparse.ArgumentParser(description="experiment_v2: 1H wick-reversal strategy")
     parser.add_argument("--once",       action="store_true", help="Run one cycle then exit")
@@ -692,6 +744,7 @@ def main() -> None:
     global STATE_FILE
     STATE_FILE = Path(f"data/experiment_v2_{exchange}_state.json")
     load_params(exchange)  # reload with exchange-specific overrides
+    load_frequency_config(exchange)  # reload frequency config with exchange overrides
 
     settings = load_settings()
     if exchange == "bithumb":
@@ -769,6 +822,7 @@ def main() -> None:
     while True:
         now = datetime.now(tz=UTC)
         load_params(exchange)  # hot-reload every tick with exchange overrides
+        load_frequency_config(exchange)  # hot-reload frequency config
 
         # ── 1. Fetch live positions ───────────────────────────────────────────
         try:
@@ -910,7 +964,7 @@ def main() -> None:
             if expected_candle_ts == state["processed_candles"].get(symbol):
                 continue
 
-            if not _check_frequency(state, symbol, now):
+            if not _check_frequency(state, symbol, now, live_positions):
                 LOGGER.debug("Frequency limit reached for %s — skipping", symbol)
                 continue
 

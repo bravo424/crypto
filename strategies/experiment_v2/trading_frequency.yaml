@@ -1,0 +1,46 @@
+# ── experiment_v2 trading-frequency config ────────────────────────────────────
+#
+# All settings here are hot-reloaded every tick (same as params.json).
+# Exchange-specific overrides live under the "exchanges" key and are merged
+# on top of the defaults below.
+#
+# ── RECOMMENDATION notes ──────────────────────────────────────────────────────
+#
+#  This strategy fires on the last CLOSED 1H candle, so the natural maximum is
+#  one signal per symbol per hour.  The filters (2× volume spike + 60% wick +
+#  EMA-50 trend) are selective: expect 1–3 signals/day across all 6 symbols.
+#
+#  nordersperhour: 1   — mirrors the 1H candle limit; no benefit in allowing 2
+#  min_bars_between_trades: 3 — 3 h cooldown per symbol after any entry to
+#                               avoid whipsawing back in right after a stop
+#  max_open_positions: 3   — caps correlated exposure when multiple symbols
+#                               signal at the same time (BTC/ETH/SOL often move
+#                               together)
+#  check_interval_seconds: 60 — polling every 60 s is already optimal for 1H
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Max new entries per symbol within a rolling 1-hour window.
+nordersperhour: 1
+
+# Minimum number of CLOSED 1H candles that must pass after any trade on a
+# symbol before a new entry on that same symbol is allowed.
+# 0 = disabled (only nordersperhour applies).
+min_bars_between_trades: 3
+
+# Maximum number of concurrent open positions across ALL symbols combined.
+# 0 = unlimited.
+max_open_positions: 3
+
+# How often (seconds) the main loop wakes up to check signals.
+# 60 s is optimal for a 1H candle strategy — fast enough to catch the signal
+# right after the hour turns, with minimal API overhead.
+check_interval_seconds: 60
+
+# ── per-exchange overrides ────────────────────────────────────────────────────
+exchanges:
+  bithumb:
+    # Bithumb is spot-only (long-only) and lower liquidity — be more conservative.
+    nordersperhour: 1
+    min_bars_between_trades: 4
+    max_open_positions: 2
+    check_interval_seconds: 60

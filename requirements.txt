@@ -3,5 +3,6 @@ playwright>=1.52,<2.0
 PyJWT>=2.8,<3.0
 pybit>=5.11,<6.0
 python-dotenv>=1.0,<2.0
+PyYAML>=6.0,<7.0
 requests>=2.32,<3.0
 tzdata>=2024.1
