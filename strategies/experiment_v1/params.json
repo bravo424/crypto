@@ -1,0 +1,17 @@
+{
+  "take_profit_pct":   0.03,
+  "stop_loss_pct":     0.02,
+  "notional_usdt":     20.0,
+  "leverage":          20,
+  "volume_spike":      1.20,
+  "notional_cap_usdt": 450.0,
+  "time_in_force":     "PostOnly",
+  "use_369":           true,
+  "exchanges": {
+    "bithumb": {
+      "notional_usdt":     5.0,
+      "notional_cap_usdt": 69.0,
+      "bithumb_tick_exit": 2
+    }
+  }
+}

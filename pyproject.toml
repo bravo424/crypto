@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "upbit-bybit-listing-bot"
+version = "0.1.0"
+description = "Trade Bybit perpetuals based on Upbit listing notices"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "beautifulsoup4>=4.12,<5.0",
+  "playwright>=1.52,<2.0",
+  "pybit>=5.11,<6.0",
+  "python-dotenv>=1.0,<2.0",
+  "requests>=2.32,<3.0",
+  "tzdata>=2024.1",
+]
+
+[project.scripts]
+listing-bot = "upbit_bybit_bot.main:main"
+strategy-hub = "scripts.strategy_hub:main"
+run-strat = "scripts.run_strategy:main"
+
+[tool.setuptools]
+package-dir = {"" = "src", "scripts" = "scripts", "strategies" = "strategies"}
+packages = [
+  "upbit_bybit_bot",
+  "scripts",
+  "strategies",
+  "strategies.experiment_v1",
+]

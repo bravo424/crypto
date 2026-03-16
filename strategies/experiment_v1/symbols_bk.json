@@ -1,0 +1,30 @@
+{
+  "symbols": [
+    {"symbol": "ATHUSDT", "leverage": 15},
+    "BERAUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    {"symbol": "DOGEUSDT", "leverage": 25},
+    "SUIUSDT",
+    "HYPEUSDT",
+    "LINKUSDT",
+    "1000PEPEUSDT",
+    "MNTUSDT",
+    "OPUSDT",
+    "WLDUSDT",
+    "ALGOUSDT",
+    "TRUMPUSDT",
+    "SAHARAUSDT",
+    "RIVERUSDT",
+    {"symbol": "FLOWUSDT", "leverage": 10},
+    "PIXELUSDT",
+    "JASMYUSDT",
+    "LUNA2USDT",
+    "CRVUSDT",
+    "MATICUSDT",
+    "ZILUSDT",
+    "FILUSDT",
+    "GALAUSDT"
+  ]
+}

@@ -1,0 +1,46 @@
+[
+  {
+    "id": "upbit_listing_execution",
+    "name": "Upbit Listing Entry Bot",
+    "type": "execution",
+    "status": "active",
+    "entry": "listing-bot",
+    "source": "src/upbit_bybit_bot/strategy.py",
+    "schedule": "poll every 3600s by default",
+    "description": "Scans Upbit listing notices, validates Bybit USDT perp availability, queues/executes pre-listing entries and sends listing alerts to Telegram."
+  },
+  {
+    "id": "portfolio_hourly_alert",
+    "name": "Bybit Portfolio Hourly Alert",
+    "type": "monitoring",
+    "status": "active",
+    "entry": "python scripts/portfolio_alert.py --account <account>",
+    "source": "scripts/portfolio_alert.py",
+    "schedule": "every 3600s by default",
+    "description": "Sends Telegram snapshots with wallet balance, unrealized PnL, PnL %, and all open positions for a chosen Bybit account key."
+  },
+  {
+    "id": "experiment_v2",
+    "name": "experiment_v2 — 1H Wick-Reversal",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v2",
+    "source": "strategies/experiment_v2/runner.py",
+    "schedule": "continuous, signal check every 60s",
+    "account": "bybit_MT325748552",
+    "symbols_file": "strategies/experiment_v2/symbols_bybit.json",
+    "description": "1H candle wick-reversal + volume spike + EMA(50) trend filter. ATR-based SL/TP, equity-% position sizing, frequency guard (2/hr per symbol). Bybit USDT-perp. Telegram alerts on open/close and 30-min updates."
+  },
+  {
+    "id": "experiment_v1",
+    "name": "experiment_v1 — Volume-Spike Momentum",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v1",
+    "source": "strategies/experiment_v1/runner.py",
+    "schedule": "continuous, signal check every 60s",
+    "account": "bybit_MT325748552",
+    "symbols_file": "strategies/experiment_v1/symbols.json",
+    "description": "5-min candle volume spike (≥10%) + directional price move → open Long or Short on Bybit USDT-perp. Leverage 10×, $10 notional, TP +5%, SL −3%. Telegram alert on open/close and 30-min updates."
+  }
+]

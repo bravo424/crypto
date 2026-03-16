@@ -1,0 +1,8 @@
+{
+  "symbols": [
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    {"symbol": "DOGEUSDT", "leverage": 25}
+      ]
+}
