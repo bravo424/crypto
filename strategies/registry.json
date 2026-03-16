@@ -32,6 +32,18 @@
     "description": "1H candle wick-reversal + volume spike + EMA(50) trend filter. ATR-based SL/TP, equity-% position sizing, frequency guard (2/hr per symbol). Bybit USDT-perp. Telegram alerts on open/close and 30-min updates."
   },
   {
+    "id": "experiment_v3",
+    "name": "experiment_v3 — 1-min ATR Trailing-Queue Scalper",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v3",
+    "source": "strategies/experiment_v3/runner.py",
+    "schedule": "continuous, signal check every 15s",
+    "account": "bybit_MT325748552",
+    "symbols_file": "strategies/experiment_v3/symbols_bybit.json",
+    "description": "1-min candle 369 EMA alignment + volume spike. Posts a PostOnly limit order trailing TRAIL_OFFSET_ATR × ATR below/above mark. Transparently refreshes stale orders every 15s. ATR-based TP/SL (2:1 R:R). Max signal age 5 min. Bybit USDT-perp."
+  },
+  {
     "id": "experiment_v1",
     "name": "experiment_v1 — Volume-Spike Momentum",
     "type": "execution",

@@ -62,6 +62,31 @@ run-strat experiment_v2 --exchange bithumb --update
 run-strat experiment_v2 --exchange bithumb --cancel-all
 run-strat experiment_v2 --exchange bithumb --close-all
 
+# ── experiment_v3 — Bybit (USDT-perp, 1-min ATR trailing-queue scalper) ──────
+#
+#   Concept: 369 EMA alignment + volume spike → post a PostOnly limit order
+#   TRAIL_OFFSET_ATR × ATR below (long) or above (short) the mark price.
+#   Transparently refreshes stale orders every 15 s.  ATR-based TP/SL (2:1 R:R).
+#   Signal expires after 5 min without a fill.  Never pays taker fees.
+#
+#   Key config: strategies/experiment_v3/params.json
+#               strategies/experiment_v3/symbols_bybit.json
+
+# Run live (continuous, checks every 15 s)
+run-strat experiment_v3
+
+# One cycle only (smoke-test)
+run-strat experiment_v3 --once
+
+# Send immediate position-update alert
+run-strat experiment_v3 --update
+
+# Cancel every open (unfilled) order
+run-strat experiment_v3 --cancel-all
+
+# Close all open positions at market and wipe local state
+run-strat experiment_v3 --close-all
+
 # ── listing bot ───────────────────────────────────────────────────────────────
 
 # Run the Upbit listing-news scraper / Bybit order bot

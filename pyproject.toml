@@ -29,4 +29,5 @@ packages = [
   "scripts",
   "strategies",
   "strategies.experiment_v1",
+  "strategies.experiment_v3",
 ]

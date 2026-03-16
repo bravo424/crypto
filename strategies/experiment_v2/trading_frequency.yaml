@@ -29,7 +29,7 @@ min_bars_between_trades: 3
 
 # Maximum number of concurrent open positions across ALL symbols combined.
 # 0 = unlimited.
-max_open_positions: 3
+max_open_positions: 5
 
 # How often (seconds) the main loop wakes up to check signals.
 # 60 s is optimal for a 1H candle strategy — fast enough to catch the signal
@@ -40,7 +40,7 @@ check_interval_seconds: 60
 exchanges:
   bithumb:
     # Bithumb is spot-only (long-only) and lower liquidity — be more conservative.
-    nordersperhour: 1
-    min_bars_between_trades: 4
+    nordersperhour: 60
+    min_bars_between_trades: 3
     max_open_positions: 2
     check_interval_seconds: 60

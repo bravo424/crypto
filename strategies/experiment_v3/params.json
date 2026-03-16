@@ -1,0 +1,16 @@
+{
+  "trail_offset_atr":   0.20,
+  "tp_atr_mult":        1.6,
+  "sl_atr_mult":        0.8,
+  "stale_mult":         3.0,
+  "max_order_age_min":  5,
+  "vmult":              1.5,
+  "vlookback":          10,
+  "atr_period":         14,
+  "leverage":           10,
+  "maxriskpct":         0.01,
+  "notional_cap_usdt":  300.0,
+  "nordersperhour":     3,
+  "max_open_positions": 3,
+  "time_in_force":      "PostOnly"
+}
