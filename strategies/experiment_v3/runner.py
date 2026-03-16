@@ -187,20 +187,29 @@ def check_369(closes: list[float]) -> str | None:
     return None
 
 
-def check_htf_trend(session: HTTP, symbol: str) -> str | None:
-    """15-min EMA trend gate: returns 'Buy', 'Sell', or None (neutral)."""
+def check_htf_trend(session: HTTP, symbol: str) -> tuple[str | None, float]:
+    """15-min EMA trend gate.  Returns (direction_or_None, atr_15m).
+
+    atr_15m is used for TP/SL sizing so exits have room to breathe beyond
+    1-minute noise.  Falls back to nan if not enough candles.
+    """
+    limit = max(HTF_EMA_PERIOD + 5, ATR_PERIOD + 2)
     resp = session.get_kline(category="linear", symbol=symbol,
-                             interval=HTF_INTERVAL, limit=HTF_EMA_PERIOD + 5)
+                             interval=HTF_INTERVAL, limit=limit)
     candles = resp["result"]["list"]
     if len(candles) < HTF_EMA_PERIOD + 1:
-        return None
-    closes = [float(c[4]) for c in reversed(candles[1:])]
-    ema    = _ema(closes, HTF_EMA_PERIOD)
+        return None, float("nan")
+    closed  = list(reversed(candles[1:]))
+    highs   = [float(c[2]) for c in closed]
+    lows    = [float(c[3]) for c in closed]
+    closes  = [float(c[4]) for c in closed]
+    ema     = _ema(closes, HTF_EMA_PERIOD)
+    atr_15m = _atr(highs, lows, closes, ATR_PERIOD)
     if closes[-1] > ema:
-        return "Buy"
+        return "Buy",  atr_15m
     if closes[-1] < ema:
-        return "Sell"
-    return None
+        return "Sell", atr_15m
+    return None, atr_15m
 
 
 # ── signal ────────────────────────────────────────────────────────────────────
@@ -385,11 +394,18 @@ def _sync_pybit_clock(testnet: bool = False) -> None:
 
 def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
                  dry_run: bool, lev_override: int | None, now: datetime,
-                 signal_at_iso: str | None = None) -> dict | None:
+                 signal_at_iso: str | None = None,
+                 exit_atr: float | None = None) -> dict | None:
     """Place (or replace) a PostOnly trailing limit entry.
+
+    atr       — 1m ATR: used only for the trail-offset (entry precision).
+    exit_atr  — 15m ATR: used for TP/SL distance and position sizing.
+                Falls back to atr if unavailable.
 
     Returns a pending_orders dict entry, or None on failure.
     """
+    # Use 15m ATR for exits so TP/SL sit beyond 1-min noise.
+    _exit_atr = exit_atr if (exit_atr and exit_atr == exit_atr and exit_atr > 0) else atr
     lev  = lev_override if lev_override is not None else LEVERAGE
     inst = get_instrument(session, symbol)
     if not inst:
@@ -404,7 +420,7 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
     min_qty   = float(lot.get("minOrderQty", "0"))
     min_not   = float(lot.get("minNotionalValue", "1"))
 
-    sl_dist = SL_ATR_MULT * atr
+    sl_dist = SL_ATR_MULT * _exit_atr
     if sl_dist <= 0:
         return None
     if MIN_ATR_PCT > 0 and atr / mark < MIN_ATR_PCT:
@@ -419,9 +435,9 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
         return None
 
     limit_px = _trail_price(side, mark, atr, tick_size)
-    # TP/SL must be relative to mark price — Bybit validates them against mark at
-    # submission time, not against the (future) fill price of the limit order.
-    tp_price, sl_price = calc_tp_sl(side, mark, atr, tick_size)
+    # TP/SL based on 15m ATR (exit_atr) — wider exits that survive 1m noise.
+    # Bybit validates TP/SL against mark at submission time, not limit price.
+    tp_price, sl_price = calc_tp_sl(side, mark, _exit_atr, tick_size)
     qty_str  = calc_qty(equity, sl_dist, qty_step, min_qty, float(limit_px))
 
     if float(qty_str) * float(limit_px) < min_not:
@@ -431,15 +447,16 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
     signal_at = signal_at_iso or now.isoformat()
 
     if dry_run:
-        LOGGER.info("[DRY RUN] QUEUE %s %s  limit=%s  tp=%s  sl=%s  atr=%.4f",
-                    side, symbol, limit_px, tp_price, sl_price, atr)
+        LOGGER.info("[DRY RUN] QUEUE %s %s  limit=%s  tp=%s  sl=%s  atr1m=%.4f  atr15m=%.4f",
+                    side, symbol, limit_px, tp_price, sl_price, atr, _exit_atr)
         return {
-            "order_id":   "dry",
-            "placed_at":  now.isoformat(),
-            "signal_at":  signal_at,
+            "order_id":    "dry",
+            "placed_at":   now.isoformat(),
+            "signal_at":   signal_at,
             "limit_price": str(limit_px),
             "side":        side,
             "atr":         atr,
+            "exit_atr":    _exit_atr,
             "tp_price":    tp_price,
             "sl_price":    sl_price,
             "qty":         qty_str,
@@ -460,8 +477,8 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
         tpTriggerBy="MarkPrice", slTriggerBy="MarkPrice",
     )
     order_id = resp["result"]["orderId"]
-    LOGGER.info("Queued %s %s  limit=%s  tp=%s  sl=%s  atr=%.4f  orderId=%s",
-                side, symbol, limit_px, tp_price, sl_price, atr, order_id)
+    LOGGER.info("Queued %s %s  limit=%s  tp=%s  sl=%s  atr1m=%.4f  atr15m=%.4f  orderId=%s",
+                side, symbol, limit_px, tp_price, sl_price, atr, _exit_atr, order_id)
     return {
         "order_id":    order_id,
         "placed_at":   now.isoformat(),
@@ -469,6 +486,7 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
         "limit_price": str(limit_px),
         "side":        side,
         "atr":         atr,
+        "exit_atr":    _exit_atr,
         "tp_price":    tp_price,
         "sl_price":    sl_price,
         "qty":         qty_str,
@@ -753,14 +771,16 @@ def main() -> None:
                     if pending.get("order_id") is not None:
                         continue   # still valid, nothing to do
                     # order_id is None → need a re-place at current price
-                    atr         = float(pending.get("atr", 0))
-                    signal_side = pending["side"]
+                    atr           = float(pending.get("atr", 0))
+                    exit_atr_val  = float(pending.get("exit_atr") or 0) or None
+                    signal_side   = pending["side"]
                     signal_at_iso = pending["signal_at"]
                     if atr > 0:
                         new_entry = _place_entry(
                             session, symbol, signal_side, atr,
                             settings.dry_run, lev_override, now,
                             signal_at_iso=signal_at_iso,
+                            exit_atr=exit_atr_val,
                         )
                         if new_entry:
                             state["pending_orders"][symbol] = new_entry
@@ -794,19 +814,23 @@ def main() -> None:
 
                 # 15-min trend alignment — only trade with the HTF direction
                 try:
-                    htf_side = check_htf_trend(session, symbol)
+                    htf_side, htf_atr = check_htf_trend(session, symbol)
                 except Exception as err:
                     LOGGER.warning("HTF trend check failed %s: %s", symbol, err)
-                    htf_side = None
+                    htf_side, htf_atr = None, float("nan")
                 if htf_side is not None and htf_side != side:
                     LOGGER.debug("HTF trend (%s) conflicts 1m signal (%s) for %s — skipped",
                                  htf_side, side, symbol)
                     continue
 
-                LOGGER.info("Signal → %s %s  atr=%.4f  htf=%s", side, symbol, atr, htf_side)
+                exit_atr_val = htf_atr if (htf_atr == htf_atr and htf_atr > 0) else None
+                LOGGER.info("Signal → %s %s  atr1m=%.4f  atr15m=%s  htf=%s",
+                            side, symbol, atr,
+                            f"{htf_atr:.4f}" if exit_atr_val else "n/a", htf_side)
                 entry_info = _place_entry(
                     session, symbol, side, atr,
                     settings.dry_run, lev_override, now,
+                    exit_atr=exit_atr_val,
                 )
                 if entry_info:
                     state["pending_orders"][symbol] = entry_info
