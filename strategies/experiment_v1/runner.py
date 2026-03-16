@@ -53,6 +53,7 @@ STOP_LOSS_PCT: Decimal    = Decimal("0.03")
 VOLUME_SPIKE: float       = 1.20
 TIME_IN_FORCE: str        = "PostOnly"
 USE_369: bool             = True
+ENTRY_OFFSET_PCT: float   = 0.001  # fraction to step inside book so PostOnly orders fill as maker
 BITHUMB_TICK_EXIT: int    = 0   # 0 = disabled; >0 = exit at ±N KRW ticks from entry
 
 
@@ -67,7 +68,7 @@ def load_params(exchange: str = "bybit") -> None:
       {"exchanges": {"bithumb": {"notional_cap_usdt": 69.0}}}
     These overlay the top-level defaults for the given exchange only.
     """
-    global LEVERAGE, NOTIONAL_USDT, NOTIONAL_CAP_USDT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, VOLUME_SPIKE, TIME_IN_FORCE, USE_369, BITHUMB_TICK_EXIT
+    global LEVERAGE, NOTIONAL_USDT, NOTIONAL_CAP_USDT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, VOLUME_SPIKE, TIME_IN_FORCE, USE_369, ENTRY_OFFSET_PCT, BITHUMB_TICK_EXIT
     path = HERE / "params.json"
     with path.open(encoding="utf-8") as fh:
         p = json.load(fh)
@@ -82,6 +83,7 @@ def load_params(exchange: str = "bybit") -> None:
     VOLUME_SPIKE      = float(p.get("volume_spike",    VOLUME_SPIKE))
     TIME_IN_FORCE     = str(p.get("time_in_force",     TIME_IN_FORCE))
     USE_369           = bool(p.get("use_369",           USE_369))
+    ENTRY_OFFSET_PCT  = float(p.get("entry_offset_pct", ENTRY_OFFSET_PCT))
     BITHUMB_TICK_EXIT = int(p.get("bithumb_tick_exit",  BITHUMB_TICK_EXIT))
 
 
@@ -410,6 +412,22 @@ def _place_bithumb_tp_order(session, symbol: str, pos: dict, state: dict) -> Non
         LOGGER.error("Failed to place Bithumb TP limit sell for %s: %s", symbol, err)
 
 
+def _maker_price(side: str, mark_price: float, tick_size: str) -> Decimal:
+    """Return a limit price guaranteed to rest in the book (maker) for PostOnly orders.
+
+    For a Buy we post ENTRY_OFFSET_PCT below mark so the order is behind the
+    best ask and Bybit accepts it as a maker.  For a Sell we post above mark.
+    When TIME_IN_FORCE is not PostOnly the offset still gives a slightly better
+    fill price, so it never hurts.
+    """
+    p    = Decimal(str(mark_price))
+    tick = Decimal(tick_size)
+    off  = Decimal(str(ENTRY_OFFSET_PCT))
+    if side == "Buy":
+        return _round_price(p * (1 - off), tick)
+    return _round_price(p * (1 + off), tick)
+
+
 def open_position(session: HTTP, symbol: str, side: str, dry_run: bool,
                   leverage_override: int | None = None) -> dict | None:
     lev = leverage_override if leverage_override is not None else LEVERAGE
@@ -469,7 +487,7 @@ def open_position(session: HTTP, symbol: str, side: str, dry_run: bool,
         symbol=symbol,
         side=side,
         orderType="Limit",
-        price=str(_round_price(Decimal(str(mark_price)), Decimal(tick_size))),
+        price=str(_maker_price(side, mark_price, tick_size)),
         qty=qty_str,
         timeInForce=TIME_IN_FORCE,
         takeProfit=tp_price,
@@ -480,7 +498,7 @@ def open_position(session: HTTP, symbol: str, side: str, dry_run: bool,
     order_id = resp["result"]["orderId"]
     LOGGER.info("Placed %s %s qty=%s price=%s  tp=%s sl=%s (pending fill)  orderId=%s",
                 side, symbol, qty_str,
-                str(_round_price(Decimal(str(mark_price)), Decimal(tick_size))),
+                str(_maker_price(side, mark_price, tick_size)),
                 tp_price, sl_price, order_id)
     return {"symbol": symbol, "side": side, "qty": qty_str,
             "entry_price": mark_price, "tp_price": tp_price, "sl_price": sl_price,

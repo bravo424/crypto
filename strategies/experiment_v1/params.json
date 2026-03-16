@@ -1,11 +1,12 @@
 {
-  "take_profit_pct":   0.05,
-  "stop_loss_pct":     0.02,
+  "take_profit_pct":   0.006,
+  "stop_loss_pct":     0.003,
   "notional_usdt":     20.0,
   "leverage":          10,
-  "volume_spike":      1.80,
+  "volume_spike":      1.50,
   "notional_cap_usdt": 300.0,
-  "time_in_force":     "GTC",
+  "time_in_force":     "PostOnly",
+  "entry_offset_pct":  0.001,
   "use_369":           true,
   "exchanges": {
     "bithumb": {
