@@ -570,7 +570,7 @@ def alert_update(alerter, positions: dict, session=None) -> None:
                 acct  = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
                 total = float(acct.get("totalEquity") or 0)
                 avail = float(acct.get("totalAvailableBalance") or 0)
-                upnl  = float(acct.get("totalPerpUPL") or 0)
+                upnl  = float(acct.get("totalPerpUPL") or 0)f
                 balance_line = (f"💰 Balance: <b>${total:,.2f}</b>  "
                                 f"Avail: ${avail:,.2f}  uPnL: {_sgn(upnl)} USDT\n")
                 break

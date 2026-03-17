@@ -2,6 +2,27 @@
   "symbols": [
     { "symbol": "SOLUSDT",       "leverage": 10 },
     { "symbol": "BNBUSDT",       "leverage": 10 },
-    { "symbol": "1000PEPEUSDT",  "leverage": 10 }
+    { "symbol": "1000PEPEUSDT",  "leverage": 10 },
+    { "symbol": "HYPEUSDT",      "leverage": 10 },
+    { "symbol": "PIXELUSDT",      "leverage": 10 },
+    { "symbol": "BCHUSDT",       "leverage": 10 },
+    { "symbol": "ETHUSDT",       "leverage": 10 },
+    { "symbol": "XRPUSDT",       "leverage": 10 },
+    { "symbol": "LTCUSDT",       "leverage": 10 },
+    { "symbol": "ADAUSDT",       "leverage": 10 },
+    { "symbol": "DOGEUSDT",      "leverage": 10 },
+    { "symbol": "MATICUSDT",     "leverage": 10 },
+    { "symbol": "DOTUSDT",       "leverage": 10 },
+    { "symbol": "AVAXUSDT",      "leverage": 10 },
+    { "symbol": "UNIUSDT",       "leverage": 10 },
+    { "symbol": "LINKUSDT",      "leverage": 10 },
+    { "symbol": "ALGOUSDT",      "leverage": 10 },
+    { "symbol": "XLMUSDT",       "leverage": 10 },
+    { "symbol": "ATOMUSDT",      "leverage": 10 },
+    { "symbol": "ETCUSDT",       "leverage": 10 },
+    { "symbol": "FILUSDT",       "leverage": 10 },
+    { "symbol": "ICPUSDT",       "leverage": 10 },
+    { "symbol": "VETUSDT",       "leverage": 10 },
+    { "symbol": "SANDUSDT",      "leverage": 10 }
   ]
 }
