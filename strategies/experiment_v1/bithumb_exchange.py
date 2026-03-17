@@ -248,15 +248,21 @@ class BithumbSession:
         return {"result": {"list": positions}}
 
     def get_wallet_balance(self, accountType=None, **_kw) -> dict:
-        """Return available balance as USDT equivalent (KRW converted at cached rate)."""
+        """Return total portfolio value as USDT equivalent.
+
+        total  = KRW cash + USDT + current market value of all crypto holdings
+        avail  = free KRW + free USDT (cash available to spend)
+        """
         resp = requests.get(
             f"{BITHUMB_BASE}/accounts",
             headers=self._auth_headers(),
             timeout=10,
         )
         resp.raise_for_status()
-        rate = self._krw_usdt_rate()
+        rate  = self._krw_usdt_rate()
         total = avail = 0.0
+        crypto_holdings: list[tuple[str, float]] = []  # (currency, total_qty)
+
         for acct in resp.json():
             cur  = acct["currency"]
             bal  = float(acct.get("balance") or 0)
@@ -267,6 +273,26 @@ class BithumbSession:
             elif cur == "KRW":
                 total += (bal + lock) / rate
                 avail += bal / rate
+            else:
+                qty = bal + lock
+                if qty > 1e-10:
+                    crypto_holdings.append((cur, qty))
+
+        # Fetch current KRW prices for all crypto holdings in one request
+        if crypto_holdings:
+            markets = ",".join(f"KRW-{cur}" for cur, _ in crypto_holdings)
+            try:
+                pr = requests.get(f"{BITHUMB_BASE}/ticker",
+                                  params={"markets": markets}, timeout=5)
+                if pr.ok:
+                    prices = {item["market"]: float(item["trade_price"])
+                              for item in pr.json() if "trade_price" in item}
+                    for cur, qty in crypto_holdings:
+                        krw_price = prices.get(f"KRW-{cur}", 0.0)
+                        total += qty * krw_price / rate
+            except Exception:
+                pass
+
         if total == 0.0:
             return {"result": {"list": [{"totalEquity": "0", "totalAvailableBalance": "0", "totalPerpUPL": "0"}]}}
         return {"result": {"list": [{
