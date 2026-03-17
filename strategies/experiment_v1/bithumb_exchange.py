@@ -261,7 +261,7 @@ class BithumbSession:
         resp.raise_for_status()
         rate  = self._krw_usdt_rate()
         total = avail = 0.0
-        crypto_holdings: list[tuple[str, float]] = []  # (currency, total_qty)
+        crypto_holdings: list[tuple[str, float, float]] = []  # (currency, total_qty, avg_buy_price_krw)
 
         for acct in resp.json():
             cur  = acct["currency"]
@@ -276,22 +276,29 @@ class BithumbSession:
             else:
                 qty = bal + lock
                 if qty > 1e-10:
-                    crypto_holdings.append((cur, qty))
+                    avg_price_krw = float(acct.get("avg_buy_price") or 0)
+                    crypto_holdings.append((cur, qty, avg_price_krw))
 
-        # Fetch current KRW prices for all crypto holdings in one request
+        # Fetch current KRW prices for all crypto holdings.
+        # Strategy: try a single batch ticker call; if it errors (happens when any
+        # currency in the list is unlisted / a special token), fall back to the
+        # avg_buy_price already returned by the accounts endpoint.
         if crypto_holdings:
-            markets = ",".join(f"KRW-{cur}" for cur, _ in crypto_holdings)
+            markets = ",".join(f"KRW-{cur}" for cur, _, _p in crypto_holdings)
+            live_prices: dict[str, float] = {}
             try:
                 pr = requests.get(f"{BITHUMB_BASE}/ticker",
                                   params={"markets": markets}, timeout=5)
                 if pr.ok:
-                    prices = {item["market"]: float(item["trade_price"])
-                              for item in pr.json() if "trade_price" in item}
-                    for cur, qty in crypto_holdings:
-                        krw_price = prices.get(f"KRW-{cur}", 0.0)
-                        total += qty * krw_price / rate
+                    data = pr.json()
+                    if isinstance(data, list):          # valid response
+                        live_prices = {item["market"]: float(item["trade_price"])
+                                       for item in data if "trade_price" in item}
             except Exception:
                 pass
+            for cur, qty, avg_price_krw in crypto_holdings:
+                krw_price = live_prices.get(f"KRW-{cur}", avg_price_krw)
+                total += qty * krw_price / rate
 
         if total == 0.0:
             return {"result": {"list": [{"totalEquity": "0", "totalAvailableBalance": "0", "totalPerpUPL": "0"}]}}
