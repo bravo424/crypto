@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import traceback
 from pathlib import Path
 
 import requests
@@ -19,7 +20,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 _POWER_TOKEN_PATH = _ROOT / "config" / "sra_strat_power_bot_token"
 
 
-def _notify_power(name: str, *, started: bool, exchange: str = "") -> None:
+def _notify_power(name: str, *, started: bool, exchange: str = "",
+                  exc: BaseException | None = None) -> None:
     """Fire-and-forget Telegram notification to sra_strat_power_bot."""
     if not _POWER_TOKEN_PATH.exists():
         return
@@ -27,13 +29,24 @@ def _notify_power(name: str, *, started: bool, exchange: str = "") -> None:
     chat_id = os.getenv("SRA_STRAT_POWER_BOT_CHAT_ID", "").strip()
     if not token or not chat_id:
         return
-    icon, action = ("🟢", "started") if started else ("🔴", "stopped")
     label = f"{name}; {exchange}" if exchange else name
+    if started:
+        icon, action = "🟢", "started"
+        text = f"{icon} <b>{label}</b> {action}"
+    elif exc is not None and not isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        icon = "💥"
+        tb = traceback.format_exception_only(type(exc), exc)[-1].strip()
+        text = f"{icon} <b>{label}</b> crashed\n<code>{tb[:300]}</code>"
+    elif isinstance(exc, KeyboardInterrupt):
+        icon = "⏹"
+        text = f"{icon} <b>{label}</b> stopped (Ctrl+C)"
+    else:
+        icon = "🔴"
+        text = f"{icon} <b>{label}</b> stopped"
     try:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": f"{icon} <b>{label}</b> {action}",
-                  "parse_mode": "HTML"},
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
             timeout=10,
         )
     except Exception:
@@ -84,10 +97,14 @@ def main() -> None:
         raise
 
     _notify_power(name, started=True, exchange=exchange)
+    _exc: BaseException | None = None
     try:
         module.main()
+    except BaseException as _e:
+        _exc = _e
+        raise
     finally:
-        _notify_power(name, started=False, exchange=exchange)
+        _notify_power(name, started=False, exchange=exchange, exc=_exc)
 
 
 def _list_strategies() -> None:
