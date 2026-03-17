@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import signal
 import sys
 import traceback
 from pathlib import Path
@@ -97,6 +98,17 @@ def main() -> None:
         raise
 
     _notify_power(name, started=True, exchange=exchange)
+
+    # Register signal handlers so stop alert fires on SIGTERM / Windows CTRL_BREAK
+    def _on_signal(signum, frame):
+        _notify_power(name, started=False, exchange=exchange,
+                      exc=KeyboardInterrupt(f"signal {signum}"))
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    if hasattr(signal, "SIGBREAK"):          # Windows only
+        signal.signal(signal.SIGBREAK, _on_signal)
+
     _exc: BaseException | None = None
     try:
         module.main()
