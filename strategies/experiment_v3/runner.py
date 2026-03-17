@@ -80,14 +80,16 @@ LEVERAGE:          int   = 10
 TIME_IN_FORCE:     str   = "PostOnly"
 HTF_INTERVAL:      str   = "15"     # higher-timeframe candles for trend filter
 HTF_EMA_PERIOD:    int   = 20       # EMA period on HTF
-MIN_ATR_PCT:       float = 0.002    # skip symbol if ATR / mark < this (0.2%)
+MIN_ATR_PCT:       float = 0.0003   # skip symbol if 1m ATR / mark < this (0.03%)
+MAX_SL_PCT:        float = 0.02     # SL never more than 2% from mark (caps PEPE-style volatility)
+MAX_TP_PCT:        float = 0.04     # TP never more than 4% from mark (maintains 2:1 R:R with cap)
 
 
 def load_params() -> None:
     global VMULT, VLOOKBACK, ATR_PERIOD, TRAIL_OFFSET_ATR, TP_ATR_MULT
     global SL_ATR_MULT, STALE_MULT, MAX_ORDER_AGE_MIN, MAXRISKPCT
     global NOTIONAL_CAP_USDT, NORDERSPERHOUR, MAX_OPEN_POSITIONS, LEVERAGE, TIME_IN_FORCE
-    global HTF_EMA_PERIOD, MIN_ATR_PCT
+    global HTF_EMA_PERIOD, MIN_ATR_PCT, MAX_SL_PCT, MAX_TP_PCT
     path = HERE / "params.json"
     with path.open(encoding="utf-8") as fh:
         p = json.load(fh)
@@ -107,6 +109,8 @@ def load_params() -> None:
     TIME_IN_FORCE      = str(p.get("time_in_force",        TIME_IN_FORCE))
     HTF_EMA_PERIOD     = int(p.get("htf_ema_period",       HTF_EMA_PERIOD))
     MIN_ATR_PCT        = float(p.get("min_atr_pct",        MIN_ATR_PCT))
+    MAX_SL_PCT         = float(p.get("max_sl_pct",         MAX_SL_PCT))
+    MAX_TP_PCT         = float(p.get("max_tp_pct",         MAX_TP_PCT))
 
 
 # ── symbols ───────────────────────────────────────────────────────────────────
@@ -438,6 +442,24 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
     # TP/SL based on 15m ATR (exit_atr) — wider exits that survive 1m noise.
     # Bybit validates TP/SL against mark at submission time, not limit price.
     tp_price, sl_price = calc_tp_sl(side, mark, _exit_atr, tick_size)
+
+    # Clamp TP/SL to a maximum % of mark so micro-cap/high-vol tokens
+    # (e.g. 1000PEPE with 10% 15m ATR) don’t produce unreachable 20% targets.
+    tick_d = Decimal(tick_size)
+    mark_d = Decimal(str(mark))
+    if side == "Buy":
+        sl_clamped = max(Decimal(sl_price), _round_down(mark_d * (1 - Decimal(str(MAX_SL_PCT))), tick_d))
+        tp_clamped = min(Decimal(tp_price), _round_down(mark_d * (1 + Decimal(str(MAX_TP_PCT))), tick_d))
+    else:
+        sl_clamped = min(Decimal(sl_price), _round_down(mark_d * (1 + Decimal(str(MAX_SL_PCT))), tick_d))
+        tp_clamped = max(Decimal(tp_price), _round_down(mark_d * (1 - Decimal(str(MAX_TP_PCT))), tick_d))
+    sl_price = format(sl_clamped.normalize(), "f")
+    tp_price = format(tp_clamped.normalize(), "f")
+    # Recalculate sl_dist from clamped SL so position sizing reflects actual risk.
+    sl_dist = float(abs(mark_d - sl_clamped))
+    if sl_dist <= 0:
+        return None
+
     qty_str  = calc_qty(equity, sl_dist, qty_step, min_qty, float(limit_px))
 
     if float(qty_str) * float(limit_px) < min_not:

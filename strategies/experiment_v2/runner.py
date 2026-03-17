@@ -77,6 +77,9 @@ NOTIONAL_CAP_USDT: float = 500.0
 LEVERAGE:          int   = 5
 TIME_IN_FORCE:     str   = "PostOnly"
 BITHUMB_TICK_EXIT: int   = 0   # 0 = disabled; >0 = exit at ±N KRW ticks from entry
+CANDLE_INTERVAL:   str   = "60"  # candle interval passed to get_kline; override per exchange
+_CANDLE_INTERVAL_SECS: int = 3600  # derived from CANDLE_INTERVAL in load_params
+FIXED_NOTIONAL_USDT: float = 0.0  # >0 = fixed trade size (skips equity-% sizing)
 
 
 def load_frequency_config(exchange: str = "bybit") -> None:
@@ -102,6 +105,7 @@ def load_params(exchange: str = "bybit") -> None:
     global EMA_PERIOD, ATR_PERIOD, VMULT, VLOOKBACK, WICK_THRESH
     global SLATRMULT, TPR, MAXRISKPCT, NORDERSPERHOUR, NOTIONAL_CAP_USDT
     global LEVERAGE, TIME_IN_FORCE, BITHUMB_TICK_EXIT, MIN_BARS_BETWEEN_TRADES
+    global CANDLE_INTERVAL, _CANDLE_INTERVAL_SECS, FIXED_NOTIONAL_USDT
     path = HERE / "params.json"
     with path.open(encoding="utf-8") as fh:
         p = json.load(fh)
@@ -121,6 +125,9 @@ def load_params(exchange: str = "bybit") -> None:
     TIME_IN_FORCE     = str(p.get("time_in_force",      TIME_IN_FORCE))
     BITHUMB_TICK_EXIT = int(p.get("bithumb_tick_exit",  BITHUMB_TICK_EXIT))
     MIN_BARS_BETWEEN_TRADES = int(p.get("min_bars_between_trades", MIN_BARS_BETWEEN_TRADES))
+    CANDLE_INTERVAL     = str(p.get("candle_interval",     CANDLE_INTERVAL))
+    FIXED_NOTIONAL_USDT = float(p.get("fixed_notional_usdt", FIXED_NOTIONAL_USDT))
+    _CANDLE_INTERVAL_SECS = int(CANDLE_INTERVAL) * 60
 
 
 # ── symbols ───────────────────────────────────────────────────────────────────
@@ -197,15 +204,15 @@ def check_signal(
     session: HTTP,
     symbol: str,
 ) -> tuple[str | None, str, dict]:
-    """Evaluate the last closed 1H candle for entry signal.
+    """Evaluate the last closed candle for entry signal.
 
     Returns (side_or_None, candle_start_time_str, tags_dict).
     tags_dict contains reason codes for logging.
     """
-    # Need enough candles for EMA(50) + ATR(14) warmup
+    # Need enough candles for EMA warmup + ATR warmup
     limit = max(EMA_PERIOD, ATR_PERIOD) + 5
     resp = session.get_kline(category="linear", symbol=symbol,
-                              interval="60", limit=limit)
+                              interval=CANDLE_INTERVAL, limit=limit)
     candles = resp["result"]["list"]
     # Bybit: newest first. candles[0] is still forming; candles[1] is last closed.
     if len(candles) < limit:
@@ -372,11 +379,14 @@ def calc_sl_tp(side: str, entry: float, atr: float, candle_low: float,
 
 def calc_qty(equity: float, risk_distance: float, qty_step: str,
              min_qty: float, entry: float) -> str:
-    """Size = (MAXRISKPCT × equity) / risk_distance, capped by NOTIONAL_CAP_USDT."""
+    """Size = (MAXRISKPCT × equity) / risk_distance, capped by NOTIONAL_CAP_USDT.
+    If FIXED_NOTIONAL_USDT > 0, uses that fixed size instead of equity-% math."""
     if risk_distance <= 0:
         return "0"
-    raw_notional = MAXRISKPCT * equity / risk_distance * entry
-    capped = min(raw_notional, NOTIONAL_CAP_USDT)
+    if FIXED_NOTIONAL_USDT > 0:
+        capped = min(FIXED_NOTIONAL_USDT, NOTIONAL_CAP_USDT)
+    else:
+        capped = min(MAXRISKPCT * equity / risk_distance * entry, NOTIONAL_CAP_USDT)
     step = Decimal(qty_step)
     qty = _round_qty(Decimal(str(capped)) / Decimal(str(entry)), step)
     min_qty_d = Decimal(str(min_qty))
@@ -404,15 +414,15 @@ def _check_frequency(state: dict, symbol: str, now: datetime,
     if len(recent) >= NORDERSPERHOUR:
         return False
 
-    # 2. minimum bars (hours) since last entry on this symbol
+        # 2. minimum bars since last entry (cooldown = N × candle interval)
     if MIN_BARS_BETWEEN_TRADES > 0:
         all_times = state["signal_times"].get(symbol, [])
         if all_times:
             last_entry = max(
                 datetime.fromisoformat(t).replace(tzinfo=UTC) for t in all_times
             )
-            hours_since = (now - last_entry).total_seconds() / 3600
-            if hours_since < MIN_BARS_BETWEEN_TRADES:
+            cooldown_secs = MIN_BARS_BETWEEN_TRADES * _CANDLE_INTERVAL_SECS
+            if (now - last_entry).total_seconds() < cooldown_secs:
                 return False
 
     # 3. global open-position cap
@@ -821,9 +831,10 @@ def main() -> None:
 
     state = load_state()
 
-    # Clear processed_candles entries older than 2 hours so a restarted bot
+    # Clear processed_candles entries older than 4 candles so a restarted bot
     # doesn't silently skip symbols whose candle was cached in a previous run.
-    cutoff_ts = int((datetime.now(tz=UTC) - timedelta(hours=2)).timestamp() * 1000)
+    cutoff_secs = max(4 * _CANDLE_INTERVAL_SECS, 120)
+    cutoff_ts = int((datetime.now(tz=UTC) - timedelta(seconds=cutoff_secs)).timestamp() * 1000)
     stale = [sym for sym, ts in state.get("processed_candles", {}).items()
              if int(ts) < cutoff_ts]
     for sym in stale:
@@ -968,7 +979,10 @@ def main() -> None:
                     state["pending_orders"].pop(symbol, None)
 
         # ── 3. Signal scan ────────────────────────────────────────────────────
-        expected_candle_ts = str((int(now.timestamp() // 3600) - 1) * 3600 * 1000)
+        expected_candle_ts = str(
+            (int(now.timestamp() // _CANDLE_INTERVAL_SECS) - 1)
+            * _CANDLE_INTERVAL_SECS * 1000
+        )
 
         for symbol, lev_override in symbols:
             has_pending  = symbol in state.get("pending_orders", {})
