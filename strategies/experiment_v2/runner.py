@@ -397,14 +397,13 @@ def calc_qty(equity: float, risk_distance: float, qty_step: str,
 
 # ── frequency guard ───────────────────────────────────────────────────────────
 
-def _check_frequency(state: dict, symbol: str, now: datetime,
-                     live_positions: dict | None = None) -> bool:
+def _check_frequency(state: dict, symbol: str, now: datetime) -> bool:
     """Return True if all frequency constraints allow a new position.
 
     Checks (in order):
       1. nordersperhour  — rolling 1-hour entry count per symbol.
-      2. min_bars_between_trades — hours since last entry on this symbol.
-      3. max_open_positions — total concurrent positions across all symbols.
+      2. min_bars_between_trades — bars since last entry on this symbol.
+      3. max_open_positions — total concurrent bot-opened positions.
     """
     # 1. rolling hourly cap
     window_start = now - timedelta(hours=1)
@@ -425,9 +424,10 @@ def _check_frequency(state: dict, symbol: str, now: datetime,
             if (now - last_entry).total_seconds() < cooldown_secs:
                 return False
 
-    # 3. global open-position cap
-    if MAX_OPEN_POSITIONS > 0 and live_positions is not None:
-        total_open = len(live_positions) + len(state.get("pending_orders", {}))
+    # 3. global open-position cap (use bot-tracked state, not broker holdings;
+    #    Bithumb get_positions returns ALL spot balances, not just bot-opened ones)
+    if MAX_OPEN_POSITIONS > 0:
+        total_open = len(state["open_positions"]) + len(state.get("pending_orders", {}))
         if total_open >= MAX_OPEN_POSITIONS:
             return False
 
@@ -993,7 +993,7 @@ def main() -> None:
             if expected_candle_ts == state["processed_candles"].get(symbol):
                 continue
 
-            if not _check_frequency(state, symbol, now, live_positions):
+            if not _check_frequency(state, symbol, now):
                 LOGGER.info("Frequency limit reached for %s — skipping", symbol)
                 continue
 
