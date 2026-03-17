@@ -19,7 +19,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 _POWER_TOKEN_PATH = _ROOT / "config" / "sra_strat_power_bot_token"
 
 
-def _notify_power(name: str, *, started: bool) -> None:
+def _notify_power(name: str, *, started: bool, exchange: str = "") -> None:
     """Fire-and-forget Telegram notification to sra_strat_power_bot."""
     if not _POWER_TOKEN_PATH.exists():
         return
@@ -28,10 +28,11 @@ def _notify_power(name: str, *, started: bool) -> None:
     if not token or not chat_id:
         return
     icon, action = ("🟢", "started") if started else ("🔴", "stopped")
+    label = f"{name}; {exchange}" if exchange else name
     try:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": f"{icon} <b>{name}</b> {action}",
+            json={"chat_id": chat_id, "text": f"{icon} <b>{label}</b> {action}",
                   "parse_mode": "HTML"},
             timeout=10,
         )
@@ -58,8 +59,18 @@ def main() -> None:
         sys.exit(1)
 
     name = sys.argv[1].replace("-", "_")
+    # Extract --exchange value before handing argv to the strategy
+    remaining = sys.argv[2:]
+    exchange = ""
+    for i, arg in enumerate(remaining):
+        if arg == "--exchange" and i + 1 < len(remaining):
+            exchange = remaining[i + 1]
+            break
+        if arg.startswith("--exchange="):
+            exchange = arg.split("=", 1)[1]
+            break
     # Pass remaining argv to the strategy's own argparse
-    sys.argv = [f"run-strat/{name}"] + sys.argv[2:]
+    sys.argv = [f"run-strat/{name}"] + remaining
 
     runner_path = Path(__file__).resolve().parent.parent / "strategies" / name / "runner.py"
     if not runner_path.exists():
@@ -72,11 +83,11 @@ def main() -> None:
         print(f"Error loading strategy '{name}': {exc}")
         raise
 
-    _notify_power(name, started=True)
+    _notify_power(name, started=True, exchange=exchange)
     try:
         module.main()
     finally:
-        _notify_power(name, started=False)
+        _notify_power(name, started=False, exchange=exchange)
 
 
 def _list_strategies() -> None:
