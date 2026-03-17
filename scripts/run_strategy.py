@@ -8,8 +8,35 @@ E.g.:   run-strat experiment_v1
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from pathlib import Path
+
+import requests
+from dotenv import load_dotenv
+
+_ROOT = Path(__file__).resolve().parent.parent
+_POWER_TOKEN_PATH = _ROOT / "config" / "sra_strat_power_bot_token"
+
+
+def _notify_power(name: str, *, started: bool) -> None:
+    """Fire-and-forget Telegram notification to sra_strat_power_bot."""
+    if not _POWER_TOKEN_PATH.exists():
+        return
+    token = _POWER_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    chat_id = os.getenv("SRA_STRAT_POWER_BOT_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return
+    icon, action = ("🟢", "started") if started else ("🔴", "stopped")
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": f"{icon} <b>{name}</b> {action}",
+                  "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def _ensure_root_on_path() -> None:
@@ -21,6 +48,7 @@ def _ensure_root_on_path() -> None:
 
 def main() -> None:
     _ensure_root_on_path()
+    load_dotenv()
 
     if len(sys.argv) < 2:
         print("Usage: run-strat <strategy_name> [args...]")
@@ -44,7 +72,11 @@ def main() -> None:
         print(f"Error loading strategy '{name}': {exc}")
         raise
 
-    module.main()
+    _notify_power(name, started=True)
+    try:
+        module.main()
+    finally:
+        _notify_power(name, started=False)
 
 
 def _list_strategies() -> None:
