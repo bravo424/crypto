@@ -61,7 +61,7 @@ UPDATE_INTERVAL = 1800    # 30 minutes between position-update Telegram alerts
 
 # ── frequency globals (hot-reloaded from trading_frequency.yaml) ─────────────
 MIN_BARS_BETWEEN_TRADES: int = 3   # 1H bars to wait after a trade before re-entering
-MAX_OPEN_POSITIONS:      int = 3   # max concurrent open positions across all symbols
+MAX_OPEN_POSITIONS:      int = 5   # max concurrent open positions across all symbols
 
 # ── mutable globals (hot-reloaded from params.json) ──────────────────────────
 EMA_PERIOD:        int   = 50
@@ -706,6 +706,13 @@ def alert_update(alerter: TelegramAlerter | None, positions: dict[str, dict],
                 LOGGER.warning("Failed to fetch wallet balance (attempt %d): %s", _attempt + 1, err)
                 time.sleep(2)
 
+    # Filter delisted (mark=0) and dust positions
+    min_notional_usdt = 10.0 / krw_rate if is_krw else 1.0
+    positions = {
+        sym: p for sym, p in positions.items()
+        if float(p.get("markPrice") or 0) > 0
+        and float(p.get("size") or 0) * float(p.get("markPrice") or 0) >= min_notional_usdt
+    }
     if not positions:
         alerter.send(f"📊 <b>experiment_v2 · 30-min update</b>\n🕐 {now_kst}\n{balance_line}No open positions.")
         return

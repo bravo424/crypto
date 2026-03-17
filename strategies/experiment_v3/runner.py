@@ -61,7 +61,7 @@ if str(HERE.parent / "experiment_v1") not in sys.path:
 
 STATE_FILE      = Path("data/experiment_v3_bybit_state.json")
 CHECK_INTERVAL  = 15       # seconds — fast tick so stale refresh works well on 1m candles
-UPDATE_INTERVAL = 1800     # 30-min Telegram position summary
+UPDATE_INTERVAL = 3600     # 60-min Telegram position summary
 
 # ── mutable globals (hot-reloaded from params.json every tick) ────────────────
 VMULT:             float = 1.5
@@ -73,9 +73,9 @@ SL_ATR_MULT:       float = 0.8    # SL distance = SL_ATR_MULT × ATR  → 2:1 R:
 STALE_MULT:        float = 3.0    # refresh if |mark − limit| > STALE_MULT × trail_offset
 MAX_ORDER_AGE_MIN: int   = 5      # abandon signal after N minutes without fill
 MAXRISKPCT:        float = 0.01   # 1% equity risk per trade
-NOTIONAL_CAP_USDT: float = 300.0  # max total open margin
+NOTIONAL_CAP_USDT: float = 400.0  # max total open margin
 NORDERSPERHOUR:    int   = 3      # max new entries per symbol per rolling hour
-MAX_OPEN_POSITIONS: int  = 3      # max concurrent open positions across all symbols
+MAX_OPEN_POSITIONS: int  = 10      # max concurrent open positions across all symbols
 LEVERAGE:          int   = 10
 TIME_IN_FORCE:     str   = "PostOnly"
 HTF_INTERVAL:      str   = "15"     # higher-timeframe candles for trend filter
@@ -576,6 +576,12 @@ def alert_update(alerter, positions: dict, session=None) -> None:
                 break
             except Exception:
                 time.sleep(2)
+    # Filter delisted (mark=0) and dust positions (< 1 USDT notional)
+    positions = {
+        sym: p for sym, p in positions.items()
+        if float(p.get("markPrice") or 0) > 0
+        and float(p.get("size") or 0) * float(p.get("markPrice") or 0) >= 1.0
+    }
     if not positions:
         alerter.send(f"📊 <b>experiment_v3 · 30-min update</b>\n🕐 {now_kst}\n{balance_line}No open positions.")
         return
