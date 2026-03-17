@@ -13,8 +13,8 @@
   "time_in_force":     "PostOnly",
   "exchanges": {
     "bithumb": {
-      "vmult":               1.5,
-      "wick_thresh":         0.45,
+      "vmult":               1.3,
+      "wick_thresh":         0.25,
       "ema_period":          20,
       "min_bars_between_trades": 2,
       "notional_cap_usdt":   69.0,

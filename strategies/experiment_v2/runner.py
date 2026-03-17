@@ -746,6 +746,8 @@ def main() -> None:
     STATE_FILE = Path(f"data/experiment_v2_{exchange}_state.json")
     load_params(exchange)  # reload with exchange-specific overrides
     load_frequency_config(exchange)  # reload frequency config with exchange overrides
+    # params.json per-exchange overrides must win over yaml defaults for shared keys
+    load_params(exchange)
 
     settings = load_settings()
     if exchange == "bithumb":
@@ -818,12 +820,24 @@ def main() -> None:
                 exchange, len(symbols), settings.dry_run)
 
     state = load_state()
+
+    # Clear processed_candles entries older than 2 hours so a restarted bot
+    # doesn't silently skip symbols whose candle was cached in a previous run.
+    cutoff_ts = int((datetime.now(tz=UTC) - timedelta(hours=2)).timestamp() * 1000)
+    stale = [sym for sym, ts in state.get("processed_candles", {}).items()
+             if int(ts) < cutoff_ts]
+    for sym in stale:
+        del state["processed_candles"][sym]
+    if stale:
+        LOGGER.info("Cleared %d stale processed_candles entries: %s", len(stale), stale)
+        save_state(state)
     last_update_at = datetime.now(tz=UTC) - timedelta(seconds=UPDATE_INTERVAL)
 
     while True:
         now = datetime.now(tz=UTC)
         load_params(exchange)  # hot-reload every tick with exchange overrides
         load_frequency_config(exchange)  # hot-reload frequency config
+        load_params(exchange)  # re-apply params so exchange overrides win over yaml
 
         # ── 1. Fetch live positions ───────────────────────────────────────────
         try:
@@ -966,7 +980,7 @@ def main() -> None:
                 continue
 
             if not _check_frequency(state, symbol, now, live_positions):
-                LOGGER.debug("Frequency limit reached for %s — skipping", symbol)
+                LOGGER.info("Frequency limit reached for %s — skipping", symbol)
                 continue
 
             try:
@@ -976,7 +990,7 @@ def main() -> None:
                 continue
 
             if meta.get("reject"):
-                LOGGER.debug("Signal rejected %s: %s  tags=%s",
+                LOGGER.info("Signal rejected %s: %s  tags=%s",
                              symbol, meta["reject"], meta.get("tags", []))
 
             if candle_ts and candle_ts == state["processed_candles"].get(symbol):
