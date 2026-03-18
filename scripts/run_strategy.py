@@ -14,6 +14,8 @@ import sys
 import traceback
 from pathlib import Path
 
+import time
+
 import requests
 from dotenv import load_dotenv
 
@@ -44,14 +46,17 @@ def _notify_power(name: str, *, started: bool, exchange: str = "",
     else:
         icon = "🔴"
         text = f"{icon} <b>{label}</b> stopped"
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=10,
-        )
-    except Exception:
-        pass
+    for attempt in range(4):
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                timeout=10,
+            )
+            return
+        except Exception:
+            if attempt < 3:
+                time.sleep(5)
 
 
 def _ensure_root_on_path() -> None:
