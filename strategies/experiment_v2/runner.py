@@ -557,14 +557,13 @@ def _place_bithumb_tp_order(session, symbol: str, pos: dict, state: dict) -> Non
         if entry_usdt:
             try:
                 rate = session._krw_usdt_rate()
+                market = session.to_market(symbol)
                 entry_krw_raw = entry_usdt * rate
-                krw_tick = session._krw_tick(entry_krw_raw)
+                krw_tick = session._live_krw_tick(market)
                 entry_krw = round(entry_krw_raw / krw_tick) * krw_tick
                 tp_krw = entry_krw + BITHUMB_TICK_EXIT * krw_tick
                 sl_krw = entry_krw - BITHUMB_TICK_EXIT * krw_tick
-                tp_tick = session._krw_tick(tp_krw)
-                if tp_tick != krw_tick:
-                    tp_krw = (tp_krw // tp_tick) * tp_tick
+                tp_krw = (tp_krw // krw_tick) * krw_tick
                 tp_price = str(tp_krw / rate)
                 tracked["tp_price"] = tp_price
                 tracked["sl_price"] = str(sl_krw / rate)

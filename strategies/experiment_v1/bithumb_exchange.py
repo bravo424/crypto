@@ -20,6 +20,8 @@ import hashlib
 import time
 import uuid
 import urllib.parse
+from functools import reduce
+from math import gcd
 
 import jwt        # PyJWT >= 2.x
 import requests
@@ -31,6 +33,10 @@ BITHUMB_BASE = "https://api.bithumb.com/v1"
 _krw_rate_cache: tuple[float, float] | None = None   # (rate, timestamp)
 _KRW_RATE_TTL = 60.0
 _KRW_RATE_FALLBACK = 1450.0
+
+# Per-market live tick cache: {market: (tick_krw, timestamp)}
+_krw_tick_cache: dict[str, tuple[int, float]] = {}
+_KRW_TICK_TTL = 300.0  # refresh every 5 minutes
 
 
 class BithumbSession:
@@ -67,8 +73,8 @@ class BithumbSession:
         return "0.00000001"
 
     @staticmethod
-    def _krw_tick(krw_price: float) -> int:
-        """Return Bithumb\'s official KRW tick unit (호가단위) for a given KRW price level."""
+    def _krw_tick_table(krw_price: float) -> int:
+        """Fallback: Bithumb KRW tick unit table (호가단위) for a given price level."""
         if krw_price >= 2_000_000:   return 1_000
         if krw_price >= 1_000_000:   return 500
         if krw_price >= 500_000:     return 100
@@ -76,7 +82,56 @@ class BithumbSession:
         if krw_price >= 10_000:      return 10
         if krw_price >= 1_000:       return 5
         if krw_price >= 100:         return 1
-        return 1  # < 100 KRW: 1 KRW is fine
+        return 1
+
+    def _krw_tick(self, krw_price: float, market: str = "") -> int:
+        """Return KRW tick unit: live from orderbook if market given, else table."""
+        if market:
+            return self._live_krw_tick(market)
+        return self._krw_tick_table(krw_price)
+
+    def _live_krw_tick(self, market: str) -> int:
+        """Fetch the actual KRW price tick size from the orderbook (cached 5 min)."""
+        global _krw_tick_cache
+        now = time.time()
+        cached = _krw_tick_cache.get(market)
+        if cached and now - cached[1] < _KRW_TICK_TTL:
+            return cached[0]
+        try:
+            resp = requests.get(
+                f"{BITHUMB_BASE}/orderbook",
+                params={"markets": market},
+                timeout=5,
+            )
+            if resp.ok:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    units = data[0].get("orderbook_units", [])
+                    prices = sorted(
+                        {int(u["ask_price"]) for u in units[:10]}
+                        | {int(u["bid_price"]) for u in units[:10]}
+                    )
+                    if len(prices) >= 2:
+                        diffs = [prices[i+1] - prices[i]
+                                 for i in range(len(prices) - 1)
+                                 if prices[i+1] != prices[i]]
+                        if diffs:
+                            tick = abs(reduce(gcd, diffs))
+                            if tick > 0:
+                                _krw_tick_cache[market] = (tick, now)
+                                return tick
+        except Exception:
+            pass
+        # Fallback: use static table with current midpoint price
+        try:
+            mid = _krw_tick_cache.get(market, (0, 0))[0]
+            if mid <= 0:
+                # estimate from last known price
+                mid = 100_000  # safe default (tick=50)
+        except Exception:
+            mid = 100_000
+        fallback = self._krw_tick_table(mid)
+        return fallback
 
     # ---- KRW/USDT rate -------------------------------------------------------
 
@@ -338,12 +393,8 @@ class BithumbSession:
             # round-trip (e.g. raw_krw = 499999.9 should use tick 50, not 100).
             if price is not None:
                 krw_int = int(round(float(price) * rate))  # USDT → nearest integer KRW
-                tick = self._krw_tick(krw_int)
+                tick = self._live_krw_tick(market)
                 snapped = (krw_int // tick) * tick
-                # After flooring we might cross into a lower tier; re-snap if tick changed.
-                tick2 = self._krw_tick(snapped)
-                if tick2 != tick:
-                    snapped = (snapped // tick2) * tick2
                 krw_price = str(snapped)
             else:
                 krw_price = None
