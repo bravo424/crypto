@@ -850,6 +850,9 @@ def main() -> None:
         save_state(state)
     last_update_at = datetime.now(tz=UTC) - timedelta(seconds=UPDATE_INTERVAL)
 
+    _fetch_fail_streak = 0
+    _FETCH_ALERT_THRESHOLD = 3
+
     while True:
         now = datetime.now(tz=UTC)
         load_params(exchange)  # hot-reload every tick with exchange overrides
@@ -859,10 +862,18 @@ def main() -> None:
         # ── 1. Fetch live positions ───────────────────────────────────────────
         try:
             live_positions = get_open_positions(session)
+            _fetch_fail_streak = 0
         except Exception as err:
-            LOGGER.warning("Failed to fetch positions: %s — retrying in %ds",
-                           err, CHECK_INTERVAL)
+            _fetch_fail_streak += 1
+            LOGGER.warning("Failed to fetch positions (streak=%d): %s — retrying in %ds",
+                           _fetch_fail_streak, err, CHECK_INTERVAL)
             LOGGER.debug("Position fetch traceback", exc_info=True)
+            if _fetch_fail_streak == _FETCH_ALERT_THRESHOLD:
+                position_alerter.send(
+                    f"⚠️ <b>experiment_v2 · {exchange}</b>: position fetch failed "
+                    f"{_fetch_fail_streak}x in a row\n"
+                    f"<code>{str(err)[:200]}</code>"
+                )
             if args.once:
                 break
             time.sleep(CHECK_INTERVAL)
