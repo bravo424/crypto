@@ -844,7 +844,10 @@ def main() -> None:
                     side, candle_ts, atr = check_signal(session, symbol)
                 except Exception as err:
                     LOGGER.warning("Signal check failed %s: %s", symbol, err)
+                    time.sleep(0.12)
                     continue
+
+                time.sleep(0.12)   # pace kline calls; 25 syms × 120 ms = 3 s burst spread
 
                 if candle_ts and candle_ts == state["processed_candles"].get(symbol):
                     continue
