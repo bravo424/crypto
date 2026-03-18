@@ -9,12 +9,12 @@
   "atr_period":         14,
   "htf_ema_period":     20,
   "min_atr_pct":        0.0003,
-  "max_sl_pct":         0.02,
-  "max_tp_pct":         0.04,
+  "max_sl_pct":         0.05,
+  "max_tp_pct":         0.10,
   "leverage":           10,
   "maxriskpct":         0.01,
-  "notional_cap_usdt":  300.0,
+  "notional_cap_usdt":  400.0,
   "nordersperhour":     3,
-  "max_open_positions": 3,
+  "max_open_positions": 6,
   "time_in_force":      "PostOnly"
 }

@@ -371,6 +371,7 @@ def _freq_ok(state: dict, symbol: str, now: datetime,
         return False
     if MAX_OPEN_POSITIONS > 0:
         total = len(live_positions) + len(state.get("pending_orders", {}))
+        LOGGER.debug(f"Frequency check: MAX_OPEN_POSITIONS: {MAX_OPEN_POSITIONS}; {len(recent)} recent signals for {symbol} in past hr; tot open+pending pos = {total}")
         if total >= MAX_OPEN_POSITIONS:
             return False
     return True
@@ -439,24 +440,25 @@ def _place_entry(session: HTTP, symbol: str, side: str, atr: float,
         return None
 
     limit_px = _trail_price(side, mark, atr, tick_size)
-    # TP/SL based on 15m ATR (exit_atr) — wider exits that survive 1m noise.
-    # Bybit validates TP/SL against mark at submission time, not limit price.
-    tp_price, sl_price = calc_tp_sl(side, mark, _exit_atr, tick_size)
+    # TP/SL anchored to the actual entry price (limit_px), not mark.
+    # Bybit validates TP/SL against mark so they must be on the correct side,
+    # but we anchor distances to the expected fill price for correct R:R.
+    tp_price, sl_price = calc_tp_sl(side, float(limit_px), _exit_atr, tick_size)
 
-    # Clamp TP/SL to a maximum % of mark so micro-cap/high-vol tokens
-    # (e.g. 1000PEPE with 10% 15m ATR) don’t produce unreachable 20% targets.
-    tick_d = Decimal(tick_size)
-    mark_d = Decimal(str(mark))
+    # Clamp TP/SL to a maximum % of entry so micro-cap/high-vol tokens
+    # do not produce unreachable targets (e.g. 1000PEPE with 10% 15m ATR).
+    tick_d     = Decimal(tick_size)
+    limit_px_d = Decimal(str(float(limit_px)))
     if side == "Buy":
-        sl_clamped = max(Decimal(sl_price), _round_down(mark_d * (1 - Decimal(str(MAX_SL_PCT))), tick_d))
-        tp_clamped = min(Decimal(tp_price), _round_down(mark_d * (1 + Decimal(str(MAX_TP_PCT))), tick_d))
+        sl_clamped = max(Decimal(sl_price), _round_down(limit_px_d * (1 - Decimal(str(MAX_SL_PCT))), tick_d))
+        tp_clamped = min(Decimal(tp_price), _round_down(limit_px_d * (1 + Decimal(str(MAX_TP_PCT))), tick_d))
     else:
-        sl_clamped = min(Decimal(sl_price), _round_down(mark_d * (1 + Decimal(str(MAX_SL_PCT))), tick_d))
-        tp_clamped = max(Decimal(tp_price), _round_down(mark_d * (1 - Decimal(str(MAX_TP_PCT))), tick_d))
+        sl_clamped = min(Decimal(sl_price), _round_down(limit_px_d * (1 + Decimal(str(MAX_SL_PCT))), tick_d))
+        tp_clamped = max(Decimal(tp_price), _round_down(limit_px_d * (1 - Decimal(str(MAX_TP_PCT))), tick_d))
     sl_price = format(sl_clamped.normalize(), "f")
     tp_price = format(tp_clamped.normalize(), "f")
-    # Recalculate sl_dist from clamped SL so position sizing reflects actual risk.
-    sl_dist = float(abs(mark_d - sl_clamped))
+    # sl_dist anchored to entry for accurate position sizing.
+    sl_dist = float(abs(limit_px_d - sl_clamped))
     if sl_dist <= 0:
         return None
 
@@ -570,7 +572,7 @@ def alert_update(alerter, positions: dict, session=None) -> None:
                 acct  = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
                 total = float(acct.get("totalEquity") or 0)
                 avail = float(acct.get("totalAvailableBalance") or 0)
-                upnl  = float(acct.get("totalPerpUPL") or 0)f
+                upnl  = float(acct.get("totalPerpUPL") or 0)
                 balance_line = (f"💰 Balance: <b>${total:,.2f}</b>  "
                                 f"Avail: ${avail:,.2f}  uPnL: {_sgn(upnl)} USDT\n")
                 break
