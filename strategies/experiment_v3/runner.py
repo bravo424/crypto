@@ -693,7 +693,9 @@ def main() -> None:
         try:
             live_positions = get_open_positions(session)
         except Exception as err:
-            LOGGER.error("Failed to fetch positions: %s", err)
+            LOGGER.warning("Failed to fetch positions: %s — retrying in %ds",
+                           err, CHECK_INTERVAL)
+            LOGGER.debug("Position fetch traceback", exc_info=True)
             if args.once:
                 break
             time.sleep(CHECK_INTERVAL)
