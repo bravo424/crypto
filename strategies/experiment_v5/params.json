@@ -1,0 +1,70 @@
+{
+  "_comment": "experiment_v5: conservative profile targeting ~1-2% per order",
+  "candle_interval": "1",
+  "htf_interval": "15",
+  "macro_interval": "60",
+
+  "atr_period": 14,
+  "rsi_period": 7,
+  "rsi_ob": 72,
+  "rsi_os": 28,
+  "bb_period": 20,
+  "bb_std": 2.0,
+  "vmult": 1.9,
+  "vlookback": 12,
+  "ema_fast": 9,
+  "ema_slow": 21,
+  "entry_aggressiveness": 0,
+  "rsi_relax_step": 2.0,
+  "vmult_scale": 1.0,
+  "bb_std_scale": 1.0,
+
+  "tp_atr_mult": 1.8,
+  "sl_atr_mult": 1.0,
+  "trail_offset_atr": 0.12,
+  "stale_mult": 2.0,
+  "max_order_age_min": 2,
+
+  "max_sl_pct": 0.012,
+  "max_tp_pct": 0.02,
+  "min_sl_pct": 0.004,
+  "min_atr_pct": 0.0004,
+  "fee_rate": 0.0002,
+
+  "leverage": 3,
+  "maxriskpct": 0.01,
+  "fixed_notional_usdt": 0.0,
+  "notional_cap_usdt": 180.0,
+  "nordersperhour": 6,
+  "max_open_positions": 2,
+  "time_in_force": "PostOnly",
+
+  "max_daily_drawdown_pct": 0.1,
+  "vol_regime_ratio": 0.35,
+  "max_loss_streak": 2,
+  "loss_streak_pause_min": 90,
+  "panic_drop_pct": 0.02,
+
+  "profit_lock_trigger_pct": 0.008,
+  "profit_lock_sl_pct": 0.003,
+
+  "bithumb_tick_exit": 8,
+  "bithumb_sl_failover_sec": 12,
+  "bithumb_notional_krw": 90000,
+
+  "exchanges": {
+    "bithumb": {
+      "entry_aggressiveness": 1,
+      "leverage": 1,
+      "notional_cap_usdt": 65.0,
+      "nordersperhour": 4,
+      "max_open_positions": 1,
+      "fee_rate": 0.0004,
+      "tp_atr_mult": 1.6,
+      "sl_atr_mult": 0.9,
+      "min_sl_pct": 0.004,
+      "bithumb_tick_exit": 8,
+      "bithumb_sl_failover_sec": 12
+    }
+  }
+}
