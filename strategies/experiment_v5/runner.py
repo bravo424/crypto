@@ -50,12 +50,45 @@ def _parse_value(raw: str) -> object:
         return s
 
 
+def _clear_pause(exchange: str) -> None:
+    """Clear loss-streak pause and reset streak counter in the state file."""
+    state_file = Path(f"data/experiment_v5_{exchange}_state.json")
+    if not state_file.exists():
+        print(f"State file not found: {state_file}")
+        return
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    was_paused = bool(state.get("loss_streak_pause_until"))
+    state["loss_streak_pause_until"] = None
+    state["loss_streak"] = 0
+    state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False),
+                          encoding="utf-8")
+    if was_paused:
+        print(f"Loss-streak pause cleared for {exchange}. Bot will resume on next cycle.")
+    else:
+        print(f"No active pause found for {exchange} (loss_streak reset to 0).")
+
+
 def _parse_cli_overrides() -> None:
     """Consume v5-only CLI flags and leave core flags in sys.argv."""
     global _runtime_overrides
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--set", action="append", default=[])
+    parser.add_argument("--clear-pause", action="store_true")
     args, remaining = parser.parse_known_args(sys.argv[1:])
+
+    # Resolve exchange from remaining args so --clear-pause knows which state file.
+    _exchange = "bybit"
+    for i, arg in enumerate(remaining):
+        if arg == "--exchange" and i + 1 < len(remaining):
+            _exchange = remaining[i + 1]
+            break
+        if arg.startswith("--exchange="):
+            _exchange = arg.split("=", 1)[1]
+            break
+
+    if args.clear_pause:
+        _clear_pause(_exchange)
+        raise SystemExit(0)
 
     overrides: dict[str, object] = {}
     for item in args.set:

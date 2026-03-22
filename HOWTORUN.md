@@ -165,6 +165,10 @@ run-strat experiment_v5 --exchange bithumb --cancel-all
 run-strat experiment_v5 --exchange bybit --close-all
 run-strat experiment_v5 --exchange bithumb --close-all
 
+# Clear loss-streak pause immediately (no restart needed, bot resumes next cycle)
+run-strat experiment_v5 --exchange bybit --clear-pause
+run-strat experiment_v5 --exchange bithumb --clear-pause
+
 # ── listing bot ───────────────────────────────────────────────────────────────
 
 # Run the Upbit listing-news scraper / Bybit order bot
