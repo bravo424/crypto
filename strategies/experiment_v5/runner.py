@@ -11,7 +11,9 @@ Design goals:
 """
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -25,18 +27,74 @@ core.HERE = HERE
 _orig_load_params = core.load_params
 _orig_check_macro_trend = core.check_macro_trend
 _last_tuning_snapshot: tuple[float, float, float, float] | None = None
+_runtime_overrides: dict[str, object] = {}
+_runtime_overrides_logged = False
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _parse_value(raw: str) -> object:
+    s = raw.strip()
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    if low in ("none", "null"):
+        return None
+    try:
+        if "." in s or "e" in low:
+            return float(s)
+        return int(s)
+    except ValueError:
+        return s
+
+
+def _parse_cli_overrides() -> None:
+    """Consume v5-only CLI flags and leave core flags in sys.argv."""
+    global _runtime_overrides
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--set", action="append", default=[])
+    args, remaining = parser.parse_known_args(sys.argv[1:])
+
+    overrides: dict[str, object] = {}
+    for item in args.set:
+        if "=" not in item:
+            raise SystemExit(f"Invalid --set format: '{item}'. Use --set key=value")
+        key, raw = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise SystemExit(f"Invalid --set key: '{item}'")
+        overrides[key] = _parse_value(raw)
+
+    _runtime_overrides = overrides
+    sys.argv = [sys.argv[0]] + remaining
+
+
 def _load_local_params(exchange: str) -> dict:
     """Load v5 params merged with exchange-specific overrides."""
+    global _runtime_overrides_logged
     with (HERE / "params.json").open(encoding="utf-8") as fh:
         p = json.load(fh)
     ex = p.get("exchanges", {}).get(exchange, {})
-    return {**p, **ex}
+    merged = {**p, **ex}
+
+    # Runtime CLI override format:
+    #   --set key=value                         -> applies to all exchanges
+    #   --set exchanges.bybit.key=value         -> only when exchange=bybit
+    #   --set exchanges.bithumb.key=value       -> only when exchange=bithumb
+    if _runtime_overrides:
+        for k, v in _runtime_overrides.items():
+            prefix = f"exchanges.{exchange}."
+            if k.startswith(prefix):
+                merged[k[len(prefix):]] = v
+            elif not k.startswith("exchanges."):
+                merged[k] = v
+        if not _runtime_overrides_logged:
+            core.LOGGER.info("v5 CLI overrides active: %s", _runtime_overrides)
+            _runtime_overrides_logged = True
+
+    return merged
 
 
 def _apply_entry_tuning(exchange: str) -> None:
@@ -138,6 +196,8 @@ def calc_tp_sl(side: str, entry: float, atr: float, tick_size: str) -> tuple[str
 
 
 def main() -> None:
+    _parse_cli_overrides()
+
     # Monkeypatch core behavior for v5.
     core.load_params = load_params
     core.check_macro_trend = check_macro_trend
