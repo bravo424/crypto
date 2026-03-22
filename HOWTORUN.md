@@ -87,6 +87,84 @@ run-strat experiment_v3 --cancel-all
 # Close all open positions at market and wipe local state
 run-strat experiment_v3 --close-all
 
+# ── experiment_v4 — Dual-TF scalp-reversal (Bybit + Bithumb) ─────────────────
+#
+#   Key config: strategies/experiment_v4/params.json
+#               strategies/experiment_v4/symbols_bybit.json
+#               strategies/experiment_v4/symbols_bithumb.json
+
+# Bybit live
+run-strat experiment_v4 --exchange bybit
+
+# Bithumb live
+run-strat experiment_v4 --exchange bithumb
+
+# One cycle only
+run-strat experiment_v4 --exchange bybit --once
+run-strat experiment_v4 --exchange bithumb --once
+
+# Send immediate position-update alert
+run-strat experiment_v4 --exchange bybit --update
+run-strat experiment_v4 --exchange bithumb --update
+
+# Cancel every open (unfilled) order
+run-strat experiment_v4 --exchange bybit --cancel-all
+run-strat experiment_v4 --exchange bithumb --cancel-all
+
+# Close all open positions at market and wipe local state
+run-strat experiment_v4 --exchange bybit --close-all
+run-strat experiment_v4 --exchange bithumb --close-all
+
+# ── experiment_v5 — Conservative profile + runtime tuning (Bybit + Bithumb) ──
+#
+#   Key config: strategies/experiment_v5/params.json
+#               strategies/experiment_v5/symbols_bybit.json
+#               strategies/experiment_v5/symbols_bithumb.json
+#
+#   v5 supports runtime overrides without editing params.json:
+#   --set key=value
+#   --set exchanges.bybit.key=value
+#   --set exchanges.bithumb.key=value
+#
+#   Common tuning keys:
+#   entry_aggressiveness, vmult_scale, rsi_relax_step, bb_std_scale
+#
+#   Notes:
+#   - Repeat --set multiple times for multiple overrides.
+#   - Overrides are hot-reload-safe (applied every cycle).
+#   - Restart strategy process after code/param changes.
+
+# Bybit live (default conservative)
+run-strat experiment_v5 --exchange bybit
+
+# Bithumb live (default conservative)
+run-strat experiment_v5 --exchange bithumb
+
+# Bybit balanced profile (more entries than default)
+run-strat experiment_v5 --exchange bybit --set entry_aggressiveness=1
+
+# Bybit active profile (even more entries)
+run-strat experiment_v5 --exchange bybit --set entry_aggressiveness=2 --set vmult_scale=0.9 --set rsi_relax_step=2.5
+
+# Exchange-scoped override example (from one launch command)
+run-strat experiment_v5 --exchange bybit --set exchanges.bybit.entry_aggressiveness=2
+
+# One cycle only
+run-strat experiment_v5 --exchange bybit --once
+run-strat experiment_v5 --exchange bithumb --once
+
+# Send immediate position-update alert
+run-strat experiment_v5 --exchange bybit --update
+run-strat experiment_v5 --exchange bithumb --update
+
+# Cancel every open (unfilled) order
+run-strat experiment_v5 --exchange bybit --cancel-all
+run-strat experiment_v5 --exchange bithumb --cancel-all
+
+# Close all open positions at market and wipe local state
+run-strat experiment_v5 --exchange bybit --close-all
+run-strat experiment_v5 --exchange bithumb --close-all
+
 # ── listing bot ───────────────────────────────────────────────────────────────
 
 # Run the Upbit listing-news scraper / Bybit order bot
