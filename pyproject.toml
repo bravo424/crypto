@@ -18,16 +18,22 @@ dependencies = [
 ]
 
 [project.scripts]
-listing-bot = "upbit_bybit_bot.main:main"
-strategy-hub = "scripts.strategy_hub:main"
-run-strat = "scripts.run_strategy:main"
+listing-bot   = "upbit_bybit_bot.main:main"
+strategy-hub  = "scripts.strategy_hub:main"
+run-strat     = "scripts.run_strategy:main"
+run-backtest  = "backtest.run_backtest:main"
 
 [tool.setuptools]
-package-dir = {"" = "src", "scripts" = "scripts", "strategies" = "strategies"}
+package-dir = {"" = "src", "scripts" = "scripts", "strategies" = "strategies", "market_data" = "market_data", "backtest" = "backtest"}
 packages = [
   "upbit_bybit_bot",
   "scripts",
   "strategies",
   "strategies.experiment_v1",
   "strategies.experiment_v3",
+  "strategies.experiment_v4",
+  "strategies.experiment_v5",
+  "strategies.experiment_v6",
+  "market_data",
+  "backtest",
 ]

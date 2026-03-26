@@ -42,11 +42,14 @@
   "max_daily_drawdown_pct": 0.1,
   "vol_regime_ratio": 0.35,
   "max_loss_streak": 2,
-  "loss_streak_pause_min": 90,
+  "loss_streak_pause_min": 10,
   "panic_drop_pct": 0.02,
 
   "profit_lock_trigger_pct": 0.008,
   "profit_lock_sl_pct": 0.003,
+
+  "md_imbalance_block_thresh": 0.40,
+  "md_pressure_block_thresh": 0.30,
 
   "bithumb_tick_exit": 8,
   "bithumb_sl_failover_sec": 12,

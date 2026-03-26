@@ -44,6 +44,48 @@
     "description": "1-min candle 369 EMA alignment + volume spike. Posts a PostOnly limit order trailing TRAIL_OFFSET_ATR × ATR below/above mark. Transparently refreshes stale orders every 15s. ATR-based TP/SL (2:1 R:R). Max signal age 5 min. Bybit USDT-perp."
   },
   {
+    "id": "experiment_v4",
+    "name": "experiment_v4 — 1m/5m Dual-TF Scalp-Reversal",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v4 --exchange bybit",
+    "entry_bithumb": "run-strat experiment_v4 --exchange bithumb",
+    "source": "strategies/experiment_v4/runner.py",
+    "schedule": "continuous, signal check every 10s",
+    "account_bybit": "bybit (450 USDT)",
+    "account_bithumb": "bithumb (100,000 KRW)",
+    "symbols_file_bybit": "strategies/experiment_v4/symbols_bybit.json",
+    "symbols_file_bithumb": "strategies/experiment_v4/symbols_bithumb.json",
+    "description": "1-min RSI(7)+Bollinger Band extreme + volume spike. 5-min EMA9/EMA21 trend gate. PostOnly limit entry with trailing stale-refresh (Bybit) or market entry (Bithumb). Native TP/SL on Bybit (ATR-based, 2:1 R:R). Bithumb: GTC TP limit sell + polled SL enforcement. 4% equity risk per trade. Target ≥10% net PnL/day."
+  },
+  {
+    "id": "experiment_v5",
+    "name": "experiment_v5 — Conservative Dual-TF Reversal",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v5 --exchange bybit",
+    "entry_bithumb": "run-strat experiment_v5 --exchange bithumb",
+    "source": "strategies/experiment_v5/runner.py",
+    "schedule": "continuous, signal check every 30s",
+    "account_bybit": "bybit (capital-preservation profile)",
+    "account_bithumb": "bithumb (capital-preservation profile)",
+    "symbols_file_bybit": "strategies/experiment_v5/symbols_bybit.json",
+    "symbols_file_bithumb": "strategies/experiment_v5/symbols_bithumb.json",
+    "description": "Built on experiment_v4 core with stricter risk caps: lower leverage, lower per-trade risk, fewer symbols, strict macro gate, and ATR-adaptive TP/SL targeting roughly 1-2% TP per trade."
+  },
+  {
+    "id": "experiment_v6",
+    "name": "experiment_v6 — Signal-Enhanced Market Making",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v6",
+    "source": "strategies/experiment_v6/runner.py",
+    "schedule": "continuous, quote refresh every 2s",
+    "account_bybit": "bybit (USDT-perp, VIP 0)",
+    "symbols_file": "market_data/symbol_list.csv",
+    "description": "Live order-book + trade-flow market making. Posts PostOnly bid+ask with ATR-spread and inventory skew. Token-bucket rate limiter (VIP 0: 8 ops/sec). Adverse-selection filter via ob_imbalance threshold. Daily drawdown + loss-streak circuit breakers."
+  },
+  {
     "id": "experiment_v1",
     "name": "experiment_v1 — Volume-Spike Momentum",
     "type": "execution",

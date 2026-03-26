@@ -169,6 +169,51 @@ run-strat experiment_v5 --exchange bithumb --close-all
 run-strat experiment_v5 --exchange bybit --clear-pause
 run-strat experiment_v5 --exchange bithumb --clear-pause
 
+# ── experiment_v6 — Signal-enhanced market making (Bybit USDT-perp) ──────────
+#
+#   Concept: posts PostOnly bid + ask every 2s based on live order-book
+#   imbalance and trade-flow signals.  Uses inventory skew to stay balanced.
+#   Requires market_data WebSocket feed (starts automatically).
+#
+#   Key config: strategies/experiment_v6/params.json
+#               market_data/symbol_list.csv
+#
+#   Fee viability (VIP 0): half_spread must be > 0.02% (break-even).
+#   Default half_spread = 0.04% (full spread 0.08% — net ~0.04% per round trip).
+
+# Run live
+run-strat experiment_v6
+
+# Dry run (no real orders, prints quotes to log)
+run-strat experiment_v6 --dry-run
+
+# One quoting cycle only (smoke-test)
+run-strat experiment_v6 --once --dry-run
+
+# Debug logging (shows every quote and signal value)
+run-strat experiment_v6 --debug --dry-run
+
+# ── backtest ──────────────────────────────────────────────────────────────────
+#
+#   Downloads 3 months of 1-min OHLCV from Bybit and simulates the MM strategy.
+#   Data is cached to data/historical/<SYMBOL>_1m.csv and reused on reruns.
+#   VIP 0 fees applied: maker 0.02% per side.
+
+# Single symbol, default params (90 days)
+run-backtest --symbol BTCUSDT --days 90
+
+# All symbols in market_data/symbol_list.csv
+run-backtest --all --days 90
+
+# Grid search over spreads to find the most profitable configuration
+run-backtest --symbol SOLUSDT --grid --days 90
+
+# Custom spread and inventory (0.05% half-spread, 200 USDT max inventory)
+run-backtest --symbol ETHUSDT --spread 0.0005 --inventory 200 --days 90
+
+# Skip API fetch, use only already-cached data
+run-backtest --symbol BTCUSDT --no-fetch
+
 # ── listing bot ───────────────────────────────────────────────────────────────
 
 # Run the Upbit listing-news scraper / Bybit order bot

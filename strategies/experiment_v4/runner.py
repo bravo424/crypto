@@ -107,6 +107,15 @@ FEE_RATE:              float = 0.0002    # per-side maker fee; TP floor = 2×fee
 _CANDLE_INTERVAL_SECS: int  = 60
 
 
+def _extra_signal_gate(symbol: str, side: str) -> bool:  # noqa: ARG001
+    """Pluggable extra gate — overridden by v5 to add market-data confirmation.
+
+    Default: always True (no-op — does not block any trade).
+    Strategies patch this via: core._extra_signal_gate = my_gate_fn
+    """
+    return True
+
+
 def load_params(exchange: str = "bybit") -> None:
     global CANDLE_INTERVAL, HTF_INTERVAL, ATR_PERIOD, RSI_PERIOD, RSI_OB, RSI_OS
     global BB_PERIOD, BB_STD, VMULT, VLOOKBACK, EMA_FAST, EMA_SLOW
@@ -1968,6 +1977,12 @@ def main() -> None:
             if _panic_mode and side == "Buy":
                 blocked_panic += 1
                 LOGGER.info("  %-20s  Panic filter: skip Long in panic market", symbol)
+                continue
+
+            # Optional extra gate — overridable by strategies (e.g. v5 market data gate).
+            # Default implementation always returns True (no-op).
+            if not _extra_signal_gate(symbol, side):
+                LOGGER.info("  %-20s  Extra gate blocked %s", symbol, side)
                 continue
 
             signals += 1

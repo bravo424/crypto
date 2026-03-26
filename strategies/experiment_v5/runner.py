@@ -19,6 +19,17 @@ from pathlib import Path
 
 from strategies.experiment_v4 import runner as core
 
+# ── optional market_data integration ─────────────────────────────────────────
+# If the market_data package is installed and the WebSocket feed is running,
+# v5 uses live order-book imbalance + trade pressure as an extra confirmation
+# gate for entries.  If unavailable the strategy runs unchanged.
+try:
+    import market_data as _md
+    _MD_AVAILABLE = True
+except ImportError:
+    _md = None          # type: ignore[assignment]
+    _MD_AVAILABLE = False
+
 HERE = Path(__file__).resolve().parent
 
 # Make v4 core read v5-local files.
@@ -205,6 +216,50 @@ def check_macro_trend(session, symbol: str) -> str | None:
     return _orig_check_macro_trend(session, symbol)
 
 
+def md_signal_gate(symbol: str, side: str) -> bool:
+    """Optional live market-data confirmation gate.
+
+    Returns True  → allow entry (or market_data unavailable — fail open).
+    Returns False → block entry because live signals oppose the direction.
+
+    Gate logic (requires BOTH to agree if data is available):
+      - ob_imbalance must not strongly oppose the intended side.
+      - 5m trade pressure must not strongly oppose the intended side.
+
+    Thresholds are intentionally generous so this is a veto-only filter,
+    not a required positive confirmation.  If the store has no data for the
+    symbol yet, allow the trade (fail open).
+    """
+    if not _MD_AVAILABLE or _md is None:
+        return True
+    try:
+        store = _md.get_signal_store()
+        sig   = store.get(symbol)
+        if sig is None:
+            return True   # no data yet — allow
+        p = _load_local_params("bybit")
+        imb_thresh  = float(p.get("md_imbalance_block_thresh",  0.40))
+        pres_thresh = float(p.get("md_pressure_block_thresh",   0.30))
+        if side == "Buy":
+            # Block if book is heavily ask-sided or trade flow is strongly negative
+            if sig.ob_imbalance < -imb_thresh and sig.trade_pressure_5m < -pres_thresh:
+                core.LOGGER.info(
+                    "  %-20s  MD gate: BLOCK Buy — imb=%.3f pres5m=%.3f",
+                    symbol, sig.ob_imbalance, sig.trade_pressure_5m,
+                )
+                return False
+        else:  # Sell
+            if sig.ob_imbalance > imb_thresh and sig.trade_pressure_5m > pres_thresh:
+                core.LOGGER.info(
+                    "  %-20s  MD gate: BLOCK Sell — imb=%.3f pres5m=%.3f",
+                    symbol, sig.ob_imbalance, sig.trade_pressure_5m,
+                )
+                return False
+    except Exception:
+        pass   # never block due to market_data errors
+    return True
+
+
 def calc_tp_sl(side: str, entry: float, atr: float, tick_size: str) -> tuple[str, str]:
     """v5 TP/SL sizing targeting ~1-2% TP with tighter SL."""
     e = Decimal(str(entry))
@@ -235,6 +290,13 @@ def main() -> None:
     core.load_params = load_params
     core.check_macro_trend = check_macro_trend
     core.calc_tp_sl = calc_tp_sl
+
+    # Wire live market-data gate if the package is available.
+    if _MD_AVAILABLE:
+        core._extra_signal_gate = md_signal_gate  # type: ignore[attr-defined]
+        core.LOGGER.info("v5: market_data signal gate enabled")
+    else:
+        core.LOGGER.info("v5: market_data not installed — running without MD gate")
 
     core.main()
 
