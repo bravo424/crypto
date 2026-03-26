@@ -208,6 +208,12 @@ run-backtest --all --days 90
 # Grid search over spreads to find the most profitable configuration
 run-backtest --symbol SOLUSDT --grid --days 90
 
+# Grid search AND write best params directly to strategies/experiment_v6/params.json
+run-backtest --symbol SOLUSDT --grid --update-params
+
+# Grid search across ALL symbols, aggregate results, then write best params
+run-backtest --all --grid --update-params
+
 # Custom spread and inventory (0.05% half-spread, 200 USDT max inventory)
 run-backtest --symbol ETHUSDT --spread 0.0005 --inventory 200 --days 90
 
