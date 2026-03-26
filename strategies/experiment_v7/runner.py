@@ -466,10 +466,13 @@ def main() -> None:
     states: dict[str, SymbolState] = {s: SymbolState() for s in symbols}
 
     # ── shutdown handler ──────────────────────────────────────────────────────
-    _shutdown = threading.Event()
+    _shutdown    = threading.Event()
+    _clean_exit  = False   # set True on graceful SIGTERM/Ctrl-C
 
     def _on_shutdown(signum, frame):  # noqa: ANN001
+        nonlocal _clean_exit
         LOGGER.info("Shutdown signal %s received", signum)
+        _clean_exit = True
         _cancel_all(session)
         md.stop_market_data()
         _shutdown.set()
@@ -488,6 +491,17 @@ def main() -> None:
     periodic_alert_ts:  datetime = _now0
     periodic_alert_eq:  float    = 0.0
     daily_report_sent_slot: str  = ""
+
+    # ── startup alert ─────────────────────────────────────────────────────────
+    if alerter:
+        try:
+            alerter.send(
+                f"🟢 <b>experiment_v7</b> started\n"
+                f"{len(symbols)} symbols | tp={_p.tp_pct*100:.1f}% sl={_p.sl_pct*100:.1f}% "
+                f"dry_run={_p.dry_run}"
+            )
+        except Exception:
+            pass
 
     try:
         while not _shutdown.is_set():
@@ -760,11 +774,32 @@ def main() -> None:
             time.sleep(_p.scan_interval_sec)
 
     except KeyboardInterrupt:
-        pass
+        _clean_exit = True
+        LOGGER.info("Keyboard interrupt — shutting down.")
+    except Exception as exc:
+        LOGGER.exception("Unhandled exception in main loop: %s", exc)
+        if alerter:
+            try:
+                alerter.send(
+                    f"🔴 <b>experiment_v7 CRASHED</b>\n"
+                    f"<code>{type(exc).__name__}: {exc}</code>\n"
+                    f"Check logs immediately. Open positions may still be live."
+                )
+            except Exception:
+                pass
     finally:
         _cancel_all(session)
         md.stop_market_data()
         LOGGER.info("experiment_v7 stopped.")
+        if alerter:
+            try:
+                stop_reason = "clean shutdown" if _clean_exit else "unexpected stop"
+                alerter.send(
+                    f"⛔ <b>experiment_v7 stopped</b> ({stop_reason})\n"
+                    f"All orders cancelled. Check open positions on Bybit."
+                )
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
