@@ -83,7 +83,19 @@
     "schedule": "continuous, quote refresh every 2s",
     "account_bybit": "bybit (USDT-perp, VIP 0)",
     "symbols_file": "market_data/symbol_list.csv",
-    "description": "Live order-book + trade-flow market making. Posts PostOnly bid+ask with ATR-spread and inventory skew. Token-bucket rate limiter (VIP 0: 8 ops/sec). Adverse-selection filter via ob_imbalance threshold. Daily drawdown + loss-streak circuit breakers."
+    "description": "Live order-book + trade-flow market making. Posts PostOnly bid+ask with ATR-spread and inventory skew. Token-bucket rate limiter (VIP 0: 8 ops/sec). Adverse-selection filter via ob_imbalance threshold. Native exchange TP/SL + daily drawdown + loss-streak circuit breakers. Note: at VIP 0 there is no maker rebate — consider experiment_v7 instead."
+  },
+  {
+    "id": "experiment_v7",
+    "name": "experiment_v7 — Signal-Driven Directional Scalp",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat experiment_v7",
+    "source": "strategies/experiment_v7/runner.py",
+    "schedule": "continuous, signal scan every 5s",
+    "account_bybit": "bybit (USDT-perp, VIP 0)",
+    "symbols_file": "market_data/symbol_list.csv",
+    "description": "Directional scalp driven by live WebSocket signals (ob_imbalance + trade_pressure_5m). Enters with market order when both signals agree. Native exchange TP (0.8%) + SL (0.4%) via set_trading_stop. Fee math: +0.725% net per TP win, -0.51% per SL loss, break-even win rate ≈ 41%. Cross margin, per-symbol leverage (5x BTC/ETH, 3x others). 30-min PnL+fee Telegram alerts + daily 10PM HKT summary."
   },
   {
     "id": "experiment_v1",

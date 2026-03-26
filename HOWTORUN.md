@@ -222,11 +222,42 @@ run-strat experiment_v6 --once --dry-run
 # Debug logging (shows every quote, signal value, and unrealised PnL)
 run-strat experiment_v6 --debug --dry-run
 
+# ── experiment_v7 — Signal-Driven Directional Scalp (Bybit USDT-perp) ────────
+#
+#   WHY not MM (v6)?  At Bybit VIP 0, maker fee = +0.02% (you pay, no rebate).
+#   MM round-trip = 0.04% before adverse selection.  directional scalp pays
+#   0.075% per trade but targets 0.8% TP → net +0.725% per win.
+#   Break-even win rate ≈ 41%.
+#
+#   Entry: ob_imbalance AND trade_pressure_5m both exceed thresholds.
+#   Execution: market order (taker, guaranteed fill).
+#   Exit: native TP + SL via set_trading_stop on exchange immediately after fill.
+#
+#   Key config: strategies/experiment_v7/params.json
+#               market_data/symbol_list.csv
+#
+#   Leverage: 5× for BTCUSDT/ETHUSDT, 3× for all others. Cross margin.
+#   Position size: equity × max_risk_pct / sl_pct, capped at max_notional_usd.
+
+# Run live
+run-strat experiment_v7
+
+# Dry run (no real orders — prints signal decisions to log)
+run-strat experiment_v7 --dry-run
+
+# One scan cycle only (smoke-test)
+run-strat experiment_v7 --once --dry-run
+
+# Debug logging (shows every signal value, ob_imbalance, trade pressure)
+run-strat experiment_v7 --debug --dry-run
+
 # ── backtest ──────────────────────────────────────────────────────────────────
 #
-#   Downloads 3 months of 1-min OHLCV from Bybit and simulates the MM strategy.
+#   Downloads 3 months of 1-min OHLCV from Bybit and simulates strategies.
 #   Data is cached to data/historical/<SYMBOL>_1m.csv and reused on reruns.
-#   VIP 0 fees applied: maker 0.02% per side.
+#   VIP 0 fees applied: maker 0.02%, taker 0.055%.
+
+# ── MM backtest (experiment_v6) ───────────────────────────────────────────────
 
 # Single symbol, default params (90 days)
 run-backtest --symbol BTCUSDT --days 90
@@ -234,7 +265,7 @@ run-backtest --symbol BTCUSDT --days 90
 # All symbols in market_data/symbol_list.csv
 run-backtest --all --days 90
 
-# Grid search over spreads to find the most profitable configuration
+# Grid search over spreads to find the most profitable MM configuration
 run-backtest --symbol SOLUSDT --grid --days 90
 
 # Grid search AND write best params directly to strategies/experiment_v6/params.json
@@ -246,8 +277,32 @@ run-backtest --all --grid --update-params
 # Custom spread and inventory (0.05% half-spread, 200 USDT max inventory)
 run-backtest --symbol ETHUSDT --spread 0.0005 --inventory 200 --days 90
 
-# Skip API fetch, use only already-cached data
-run-backtest --symbol BTCUSDT --no-fetch
+# ── Directional backtest (experiment_v7) ──────────────────────────────────────
+#
+#   Proxies live ob_imbalance + trade_pressure_5m using candle momentum
+#   (N of last M candles agree in direction + volume surge).
+#   Entry at market (taker fee), TP as limit (maker fee), SL at market.
+
+# Single symbol, default params
+run-backtest --directional --symbol BTCUSDT --days 90
+
+# All symbols
+run-backtest --directional --all --days 90
+
+# Grid search over momentum_ratio × vol_mult combinations
+run-backtest --directional --symbol SOLUSDT --grid --days 90
+
+# Grid search AND write best params to strategies/experiment_v7/params.json
+run-backtest --directional --symbol SOLUSDT --grid --update-v7-params
+
+# Grid all symbols then write best aggregated params
+run-backtest --directional --all --grid --update-v7-params
+
+# Custom TP/SL
+run-backtest --directional --symbol BTCUSDT --tp 0.010 --sl 0.005 --days 90
+
+# Skip API fetch (use cached data only)
+run-backtest --directional --symbol BTCUSDT --no-fetch
 
 # ── listing bot ───────────────────────────────────────────────────────────────
 

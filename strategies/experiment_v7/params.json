@@ -1,0 +1,41 @@
+{
+  "_comment": "experiment_v7 — Signal-Driven Directional Scalp on Bybit USDT-perp.",
+  "_why": "MM at VIP 0 costs 0.04% round-trip with no rebate. Directional scalp pays 0.075% (entry taker + TP maker) but targets 0.8% TP — net +0.725% per win. Break-even win rate ≈ 41%.",
+
+  "_comment_signal": "Entry: ob_imbalance AND trade_pressure_5m must both exceed thresholds in same direction.",
+  "ob_imbalance_thresh":   0.25,
+  "pressure_thresh":       0.15,
+  "require_trend_bias":    false,
+
+  "_comment_pos": "TP/SL placed on exchange (set_trading_stop) immediately on fill.",
+  "tp_pct":                0.008,
+  "sl_pct":                0.004,
+  "max_hold_min":          20,
+
+  "_comment_size": "Notional = equity × max_risk_pct / sl_pct, capped at max_notional_usd.",
+  "max_risk_pct":          0.01,
+  "max_notional_usd":      200.0,
+
+  "_comment_freq": "cooldown_sec between entries per symbol. max_open_positions across all.",
+  "cooldown_sec":          60,
+  "max_open_positions":    3,
+  "scan_interval_sec":     5.0,
+
+  "_comment_lev": "5x for BTC/ETH (liquid, tight spread), 3x for others.",
+  "leverage_default":      3,
+  "symbol_leverage": {
+    "BTCUSDT": 5,
+    "ETHUSDT": 5
+  },
+  "use_cross_margin":      true,
+
+  "max_daily_drawdown_pct": 0.03,
+  "max_loss_streak":        3,
+  "loss_streak_pause_min":  30,
+
+  "periodic_alert_min":     30,
+  "daily_report_hkt_hour":  22,
+
+  "ws_startup_wait_sec":    8,
+  "dry_run":                false
+}

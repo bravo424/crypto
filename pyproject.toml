@@ -34,6 +34,7 @@ packages = [
   "strategies.experiment_v4",
   "strategies.experiment_v5",
   "strategies.experiment_v6",
+  "strategies.experiment_v7",
   "market_data",
   "backtest",
   "utils",
