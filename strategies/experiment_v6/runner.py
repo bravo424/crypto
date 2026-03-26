@@ -36,7 +36,7 @@ import signal
 import sys
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from pathlib import Path
 
@@ -54,6 +54,8 @@ HERE   = Path(__file__).resolve().parent
 
 MAKER_FEE = 0.0002
 TAKER_FEE = 0.00055
+
+HKT = timezone(timedelta(hours=8))   # Hong Kong Time = UTC+8
 
 
 # ── params ────────────────────────────────────────────────────────────────────
@@ -80,6 +82,9 @@ class Params:
     max_daily_drawdown_pct:       float = 0.03
     max_loss_streak:              int   = 3
     loss_streak_pause_min:        int   = 30
+    # ── alerting ─────────────────────────────────────────────────────────────
+    periodic_alert_min:           int   = 30   # rolling PnL+fee alert interval
+    daily_report_hkt_hour:        int   = 22   # 10 PM HKT daily summary
     ws_startup_wait_sec:          float = 5.0
     dry_run:                      bool  = False
 
@@ -114,6 +119,8 @@ def load_params() -> None:
     _p.max_daily_drawdown_pct        = float(d.get("max_daily_drawdown_pct",         _p.max_daily_drawdown_pct))
     _p.max_loss_streak               = int(d.get("max_loss_streak",                  _p.max_loss_streak))
     _p.loss_streak_pause_min         = int(d.get("loss_streak_pause_min",            _p.loss_streak_pause_min))
+    _p.periodic_alert_min            = int(d.get("periodic_alert_min",               _p.periodic_alert_min))
+    _p.daily_report_hkt_hour         = int(d.get("daily_report_hkt_hour",            _p.daily_report_hkt_hour))
     _p.ws_startup_wait_sec           = float(d.get("ws_startup_wait_sec",            _p.ws_startup_wait_sec))
     _p.dry_run                       = bool(d.get("dry_run",                         _p.dry_run))
 
@@ -200,6 +207,38 @@ def _round_qty(qty: float, step: str) -> str:
 def _get_equity(session: HTTP) -> float:
     resp = session.get_wallet_balance(accountType="UNIFIED")
     return float(resp["result"]["list"][0].get("totalEquity") or 0)
+
+
+def _fetch_fees(session: HTTP, since: datetime, until: datetime) -> float:
+    """Sum |execFee| for all linear perpetual executions in [since, until].
+
+    Handles Bybit cursor-based pagination automatically.
+    Returns 0.0 on any API error so alert still sends with a note.
+    """
+    total: float = 0.0
+    cursor: str  = ""
+    start_ms = int(since.timestamp() * 1000)
+    end_ms   = int(until.timestamp() * 1000)
+    try:
+        while True:
+            kwargs: dict = dict(
+                category="linear",
+                startTime=start_ms,
+                endTime=end_ms,
+                limit=100,
+            )
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp   = session.get_executions(**kwargs)
+            result = resp.get("result", {})
+            for e in result.get("list", []):
+                total += abs(float(e.get("execFee") or 0))
+            cursor = result.get("nextPageCursor") or ""
+            if not cursor:
+                break
+    except Exception as exc:
+        LOGGER.warning("_fetch_fees [%s→%s]: %s", since.isoformat(), until.isoformat(), exc)
+    return total
 
 
 def _get_positions(session: HTTP) -> dict[str, dict]:
@@ -576,6 +615,14 @@ def main() -> None:
     loss_streak_pause_until: datetime | None = None
     prev_positions:     dict[str, dict] = {}
 
+    # ── alert state ───────────────────────────────────────────────────────────
+    # 30-min rolling alert — window starts when bot starts
+    _now0               = datetime.now(tz=UTC)
+    periodic_alert_ts:  datetime = _now0   # start of current window
+    periodic_alert_eq:  float    = 0.0     # equity at window start (set on first equity fetch)
+    # Daily report — "YYYY-MM-DD HH" in HKT; prevents duplicate sends within same hour
+    daily_report_sent_slot: str  = ""
+
     try:
         while not _shutdown.is_set():
             now = datetime.now(tz=UTC)
@@ -594,6 +641,9 @@ def main() -> None:
             if daily_start_equity and daily_start_equity > 0:
                 try:
                     curr_eq = _get_equity(session)
+                    # Seed periodic alert equity on first successful fetch
+                    if periodic_alert_eq == 0.0:
+                        periodic_alert_eq = curr_eq
                     dd = (daily_start_equity - curr_eq) / daily_start_equity
                     if dd >= _p.max_daily_drawdown_pct:
                         LOGGER.warning(
@@ -604,6 +654,64 @@ def main() -> None:
                         continue
                 except Exception:
                     pass
+
+            # ── 30-min rolling PnL + fee alert ───────────────────────────────
+            elapsed_min = (now - periodic_alert_ts).total_seconds() / 60.0
+            if alerter and elapsed_min >= _p.periodic_alert_min and periodic_alert_eq > 0:
+                try:
+                    curr_eq   = _get_equity(session)
+                    pnl_30    = curr_eq - periodic_alert_eq
+                    pnl_pct   = (pnl_30 / periodic_alert_eq * 100) if periodic_alert_eq > 0 else 0.0
+                    fees_30   = _fetch_fees(session, periodic_alert_ts, now)
+                    icon      = "📈" if pnl_30 >= 0 else "📉"
+                    open_cnt  = sum(1 for s in states.values() if s.net_pos_qty != 0.0)
+                    alerter.send(
+                        f"{icon} <b>experiment_v6</b> — {_p.periodic_alert_min}min Update\n"
+                        f"PnL ({_p.periodic_alert_min}m): <b>{pnl_30:+.4f} USDT</b>"
+                        f" ({pnl_pct:+.2f}%)\n"
+                        f"Fees ({_p.periodic_alert_min}m): {fees_30:.4f} USDT\n"
+                        f"Balance: {curr_eq:.4f} USDT\n"
+                        f"Open positions: {open_cnt}"
+                    )
+                    LOGGER.info(
+                        "Periodic alert sent | pnl=%+.4f fees=%.4f balance=%.4f",
+                        pnl_30, fees_30, curr_eq,
+                    )
+                    periodic_alert_ts = now
+                    periodic_alert_eq = curr_eq
+                except Exception as exc:
+                    LOGGER.warning("Periodic alert failed: %s", exc)
+
+            # ── daily summary at daily_report_hkt_hour HKT ────────────────────
+            now_hkt   = now.astimezone(HKT)
+            hkt_slot  = now_hkt.strftime("%Y-%m-%d %H")   # e.g. "2026-03-26 22"
+            if (alerter
+                    and daily_start_equity
+                    and now_hkt.hour == _p.daily_report_hkt_hour
+                    and now_hkt.minute < 5          # 5-min window to catch the hour
+                    and hkt_slot != daily_report_sent_slot):
+                try:
+                    curr_eq  = _get_equity(session)
+                    pnl_day  = curr_eq - daily_start_equity
+                    pnl_pct  = (pnl_day / daily_start_equity * 100) if daily_start_equity > 0 else 0.0
+                    day_start_dt = datetime.strptime(daily_date, "%Y-%m-%d").replace(tzinfo=UTC)
+                    fees_day = _fetch_fees(session, day_start_dt, now)
+                    icon     = "📈" if pnl_day >= 0 else "📉"
+                    alerter.send(
+                        f"{icon} <b>experiment_v6</b> — Daily Summary\n"
+                        f"({now_hkt.strftime('%Y-%m-%d')} {_p.daily_report_hkt_hour}:00 HKT)\n"
+                        f"PnL (today): <b>{pnl_day:+.4f} USDT</b> ({pnl_pct:+.2f}%)\n"
+                        f"Fees (today): {fees_day:.4f} USDT\n"
+                        f"Balance: {curr_eq:.4f} USDT\n"
+                        f"Day start: {daily_start_equity:.4f} USDT"
+                    )
+                    LOGGER.info(
+                        "Daily report sent | pnl=%+.4f fees=%.4f balance=%.4f",
+                        pnl_day, fees_day, curr_eq,
+                    )
+                    daily_report_sent_slot = hkt_slot
+                except Exception as exc:
+                    LOGGER.warning("Daily report failed: %s", exc)
 
             # ── loss-streak pause ─────────────────────────────────────────────
             if loss_streak_pause_until and now < loss_streak_pause_until:

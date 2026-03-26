@@ -29,6 +29,10 @@
   "max_loss_streak":               3,
   "loss_streak_pause_min":         30,
 
+  "_comment_alert": "periodic_alert_min: rolling PnL+fee Telegram alert interval. daily_report_hkt_hour: 22 = 10 PM HKT.",
+  "periodic_alert_min":            30,
+  "daily_report_hkt_hour":         22,
+
   "symbols_csv":                   "market_data/symbol_list.csv",
   "ws_startup_wait_sec":           5,
 
