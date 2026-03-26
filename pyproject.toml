@@ -24,7 +24,7 @@ run-strat     = "scripts.run_strategy:main"
 run-backtest  = "backtest.run_backtest:main"
 
 [tool.setuptools]
-package-dir = {"" = "src", "scripts" = "scripts", "strategies" = "strategies", "market_data" = "market_data", "backtest" = "backtest"}
+package-dir = {"" = "src", "scripts" = "scripts", "strategies" = "strategies", "market_data" = "market_data", "backtest" = "backtest", "utils" = "utils"}
 packages = [
   "upbit_bybit_bot",
   "scripts",
@@ -36,4 +36,5 @@ packages = [
   "strategies.experiment_v6",
   "market_data",
   "backtest",
+  "utils",
 ]

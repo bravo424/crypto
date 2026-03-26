@@ -319,13 +319,8 @@ def main() -> None:
                         help="Run one quoting cycle and exit")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    for noisy in ("urllib3", "pybit", "requests", "httpcore", "httpx",
-                  "websocket"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    from utils.logging_setup import setup_logging
+    setup_logging("experiment_v6", debug=args.debug)
 
     if args.dry_run:
         _p.dry_run = True

@@ -61,8 +61,9 @@ class _SingleConnection(threading.Thread):
         self._flow    = flow
         self._engine  = engine
         self._ws: websocket.WebSocketApp | None = None
-        self._stop_event = threading.Event()
-        self._connected  = threading.Event()
+        self._stop_event  = threading.Event()
+        self._connected   = threading.Event()
+        self._msg_counter = 0          # counts market data messages received
 
     def run(self) -> None:
         delay = _RECONNECT_BASE
@@ -113,12 +114,22 @@ class _SingleConnection(threading.Thread):
         # Heartbeat / subscription confirmation
         if "op" in msg:
             if msg.get("op") == "subscribe":
-                LOGGER.debug("%s: subscription ack: %s", self.name, msg.get("success"))
+                ok = msg.get("success", False)
+                if ok:
+                    LOGGER.info("%s: subscription confirmed — %s",
+                                self.name, msg.get("ret_msg", "ok"))
+                else:
+                    LOGGER.warning("%s: subscription FAILED — %s",
+                                   self.name, msg.get("ret_msg", "unknown"))
             return
 
         topic: str = msg.get("topic", "")
         data        = msg.get("data", {})
         msg_type    = msg.get("type", "")
+
+        self._msg_counter += 1
+        if self._msg_counter % 1000 == 0:
+            LOGGER.info("%s: ✓ %d market-data messages received", self.name, self._msg_counter)
 
         if topic.startswith("orderbook."):
             symbol = topic.split(".")[-1]

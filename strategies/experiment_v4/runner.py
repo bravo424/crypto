@@ -1142,10 +1142,8 @@ def main() -> None:
     parser.add_argument("--debug",      action="store_true")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    for _noisy in ("urllib3", "pybit", "requests", "httpcore", "httpx"):
-        logging.getLogger(_noisy).setLevel(logging.WARNING)
+    from utils.logging_setup import setup_logging
+    setup_logging(f"experiment_v4_{exchange}", debug=args.debug)
 
     exchange = args.exchange
     is_spot  = exchange == "bithumb"

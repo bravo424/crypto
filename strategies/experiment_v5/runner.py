@@ -286,6 +286,20 @@ def calc_tp_sl(side: str, entry: float, atr: float, tick_size: str) -> tuple[str
 def main() -> None:
     _parse_cli_overrides()
 
+    # Resolve exchange early so the log file is named correctly.
+    _exchange_for_log = "bybit"
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == "--exchange" and i < len(sys.argv):
+            _exchange_for_log = sys.argv[i]
+            break
+        if arg.startswith("--exchange="):
+            _exchange_for_log = arg.split("=", 1)[1]
+            break
+
+    _debug_for_log = "--debug" in sys.argv
+    from utils.logging_setup import setup_logging
+    setup_logging(f"experiment_v5_{_exchange_for_log}", debug=_debug_for_log)
+
     # Monkeypatch core behavior for v5.
     core.load_params = load_params
     core.check_macro_trend = check_macro_trend
@@ -293,6 +307,11 @@ def main() -> None:
 
     # Wire live market-data gate if the package is available.
     if _MD_AVAILABLE:
+        # Start the WebSocket feed so SignalStore is populated before the first
+        # scan cycle.  start_market_data() is idempotent — safe to call even if
+        # experiment_v6 is also running in a separate process.
+        _md.start_market_data()  # type: ignore[union-attr]
+        core.LOGGER.info("v5: market_data WebSocket feed started")
         core._extra_signal_gate = md_signal_gate  # type: ignore[attr-defined]
         core.LOGGER.info("v5: market_data signal gate enabled")
     else:
