@@ -1,0 +1,11 @@
+{
+  "symbols": [
+    { "symbol": "BTCUSDT", "leverage": 3 },
+    { "symbol": "ETHUSDT", "leverage": 3 },
+    { "symbol": "SOLUSDT", "leverage": 3 },
+    { "symbol": "XRPUSDT", "leverage": 3 },
+    { "symbol": "BNBUSDT", "leverage": 3 },
+    { "symbol": "DOGEUSDT", "leverage": 3 },
+    { "symbol": "HYPEUSDT", "leverage": 3 }
+  ]
+}

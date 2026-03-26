@@ -23,6 +23,7 @@
     { "symbol": "FILUSDT",       "leverage": 10 },
     { "symbol": "ICPUSDT",       "leverage": 10 },
     { "symbol": "VETUSDT",       "leverage": 10 },
-    { "symbol": "SANDUSDT",      "leverage": 10 }
+    { "symbol": "SANDUSDT",      "leverage": 10 },
+    { "symbol": "ASTERUSDT",      "leverage": 10 }
   ]
 }

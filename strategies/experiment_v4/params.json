@@ -1,0 +1,63 @@
+{
+  "_comment": "experiment_v4 — multi-timeframe scalp-reversal. Target 10%/day net of fees.",
+
+  "candle_interval":        "5",
+  "htf_interval":          "15",
+  "atr_period":            14,
+  "rsi_period":            7,
+  "rsi_ob":                70,
+  "rsi_os":                30,
+  "bb_period":             20,
+  "bb_std":                2.0,
+  "vmult":                 1.5,
+  "vlookback":             10,
+  "ema_fast":              9,
+  "ema_slow":              21,
+
+  "tp_atr_mult":           2.0,
+  "sl_atr_mult":           1.0,
+  "trail_offset_atr":      0.15,
+  "stale_mult":            2.5,
+  "max_order_age_min":     3,
+  "max_sl_pct":            0.04,
+  "max_tp_pct":            0.08,
+  "min_sl_pct":            0.004,
+  "min_atr_pct":           0.0002,
+
+  "leverage":              5,
+  "maxriskpct":            0.04,
+  "fixed_notional_usdt":   0.0,
+  "notional_cap_usdt":     430.0,
+  "nordersperhour":        20,
+  "max_open_positions":    2,
+  "time_in_force":         "PostOnly",
+  "max_daily_drawdown_pct": 0.10,
+  "vol_regime_ratio":      0.35,
+  "fee_rate":              0.0002,
+  "macro_interval":        "60",
+  "max_loss_streak":       3,
+  "loss_streak_pause_min": 60,
+  "panic_drop_pct":        0.03,
+  "profit_lock_trigger_pct": 0.01,
+  "profit_lock_sl_pct":      0.005,
+
+  "bithumb_tick_exit":     10,
+  "bithumb_notional_krw":  95000,
+
+  "exchanges": {
+    "bithumb": {
+      "candle_interval":    "5",
+      "htf_interval":      "15",
+      "leverage":           1,
+      "maxriskpct":         0.04,
+      "notional_cap_usdt":  69.0,
+      "nordersperhour":     20,
+      "max_open_positions": 2,
+      "bithumb_tick_exit":  7,
+      "tp_atr_mult":        1.5,
+      "sl_atr_mult":        0.8,
+      "min_sl_pct":         0.003,
+      "fee_rate":           0.0004
+    }
+  }
+}

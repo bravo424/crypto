@@ -1,4 +1,0 @@
-[console_scripts]
-listing-bot = upbit_bybit_bot.main:main
-run-strat = scripts.run_strategy:main
-strategy-hub = scripts.strategy_hub:main

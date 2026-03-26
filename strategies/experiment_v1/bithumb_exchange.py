@@ -371,26 +371,31 @@ class BithumbSession:
         market = self.to_market(symbol)
         bithumb_side = "bid" if side == "Buy" else "ask"
 
-        # Bithumb ord_type:
-        #   "limit"  = limit order (Buy or Sell)
-        #   "market" = market order
+        # Bithumb ord_type rules:
+        #   "limit"  — limit order (Buy or Sell), requires price + volume.
+        #   "price"  — KRW market buy: specify total KRW to spend in `price`;
+        #              Bithumb fills as many coins as that KRW amount buys.
+        #              This is the only valid market-buy form for KRW markets.
+        #   "market" — market sell by coin volume; valid for Sell side only.
         # Note: Bithumb does not support "post_only"; PostOnly is treated as limit.
+        is_krw = self._is_krw_market(market)
         if reduceOnly:
+            # reduceOnly = close / SL market sell
             ord_type = "market"
+        elif side == "Buy" and orderType != "Limit" and is_krw:
+            # KRW market buy must be ord_type="price" with the KRW spend amount
+            ord_type = "price"
         elif side == "Sell" and orderType == "Limit" and price is not None:
             ord_type = "limit"
-        elif side == "Sell":
+        elif side == "Sell" and orderType != "Limit":
             ord_type = "market"
         else:
             ord_type = "limit"
 
-        if self._is_krw_market(market):
+        if is_krw:
             rate = self._krw_usdt_rate()
             # price arrives in USDT from runner.py -- convert to KRW and snap
             # to Bithumb's official tick unit (호가단위) for that price level.
-            # Use integer KRW and guard against tier-boundary crossing after snap,
-            # which can happen due to floating-point imprecision in the USDT→KRW
-            # round-trip (e.g. raw_krw = 499999.9 should use tick 50, not 100).
             if price is not None:
                 krw_int = int(round(float(price) * rate))  # USDT → nearest integer KRW
                 tick = self._live_krw_tick(market)
@@ -401,7 +406,31 @@ class BithumbSession:
         else:
             krw_price = str(price) if price is not None else None
 
-        if ord_type == "market":
+        if ord_type == "price":
+            # KRW market buy: send total KRW spend amount in `price` field.
+            # qty here is coin volume from runner; convert to KRW spend amount.
+            rate = self._krw_usdt_rate()
+            krw_spend = int(round(float(qty) * float(price or 0) * rate)) if price else \
+                        int(round(float(qty) * rate))
+            # Fallback: if no price supplied use live ticker to estimate KRW spend
+            if krw_spend <= 0:
+                try:
+                    ticker_resp = __import__("requests").get(
+                        f"{BITHUMB_BASE}/ticker", params={"markets": market}, timeout=5)
+                    live_krw = float(ticker_resp.json()[0]["trade_price"])
+                    krw_spend = int(round(float(qty) * live_krw))
+                except Exception:
+                    krw_spend = 5000   # absolute minimum fallback (₩5,000)
+            # Enforce Bithumb's 5,000 KRW minimum order
+            if krw_spend < 5000:
+                krw_spend = 5000
+            params = {
+                "market": market,
+                "side": bithumb_side,
+                "ord_type": "price",
+                "price": str(krw_spend),
+            }
+        elif ord_type == "market":
             params = {
                 "market": market,
                 "side": bithumb_side,

@@ -46,20 +46,14 @@ def _notify_power(name: str, *, started: bool, exchange: str = "",
     else:
         icon = "🔴"
         text = f"{icon} <b>{label}</b> stopped"
-    # Start alerts are best-effort (don't delay strategy launch).
-    # Stop/crash alerts retry a few times in case of transient network issues.
-    retries = 1 if started else 4
-    for attempt in range(retries):
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-                timeout=10,
-            )
-            return
-        except Exception:
-            if attempt < retries - 1:
-                time.sleep(5)
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def _ensure_root_on_path() -> None:

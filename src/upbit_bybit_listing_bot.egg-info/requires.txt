@@ -1,6 +1,0 @@
-beautifulsoup4<5.0,>=4.12
-playwright<2.0,>=1.52
-pybit<6.0,>=5.11
-python-dotenv<2.0,>=1.0
-requests<3.0,>=2.32
-tzdata>=2024.1

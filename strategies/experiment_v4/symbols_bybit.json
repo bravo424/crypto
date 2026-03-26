@@ -1,0 +1,21 @@
+{
+  "symbols": [
+    { "symbol": "BTCUSDT",       "leverage": 10 },
+    { "symbol": "ETHUSDT",       "leverage": 10 },
+    { "symbol": "SOLUSDT",       "leverage": 10 },
+    { "symbol": "XRPUSDT",       "leverage": 10 },
+    { "symbol": "BNBUSDT",       "leverage": 10 },
+    { "symbol": "DOGEUSDT",      "leverage": 10 },
+    { "symbol": "ADAUSDT",       "leverage": 10 },
+    { "symbol": "AVAXUSDT",      "leverage": 10 },
+    { "symbol": "LINKUSDT",      "leverage": 10 },
+    { "symbol": "DOTUSDT",       "leverage": 10 },
+    { "symbol": "1000PEPEUSDT",  "leverage": 10 },
+    { "symbol": "LTCUSDT",       "leverage": 10 },
+    { "symbol": "BCHUSDT",       "leverage": 10 },
+    { "symbol": "UNIUSDT",       "leverage": 10 },
+    { "symbol": "XLMUSDT",       "leverage": 10 },
+    { "symbol": "ASTERUSDT",     "leverage": 10 }
+    
+  ]
+}
