@@ -491,6 +491,7 @@ def main() -> None:
     periodic_alert_ts:  datetime = _now0
     periodic_alert_eq:  float    = 0.0
     daily_report_sent_slot: str  = ""
+    _dd_halt_alerted:   bool     = False
 
     # ── startup alert ─────────────────────────────────────────────────────────
     if alerter:
@@ -514,6 +515,7 @@ def main() -> None:
                 try:
                     daily_start_equity = _get_equity(session)
                     daily_date = today
+                    _dd_halt_alerted = False
                     LOGGER.info("New day — equity snapshot: %.4f USDT", daily_start_equity)
                 except Exception:
                     pass
@@ -527,10 +529,22 @@ def main() -> None:
                     dd = (daily_start_equity - curr_eq) / daily_start_equity
                     if dd >= _p.max_daily_drawdown_pct:
                         LOGGER.warning(
-                            "Daily drawdown %.1f%% ≥ limit %.0f%% — halting",
+                            "Daily drawdown %.1f%% ≥ limit %.0f%% — halting new entries for the day",
                             dd * 100, _p.max_daily_drawdown_pct * 100)
                         _cancel_all(session)
-                        time.sleep(_p.scan_interval_sec)
+                        if alerter and not _dd_halt_alerted:
+                            try:
+                                alerter.send(
+                                    f"🛑 <b>experiment_v7</b> daily drawdown halt\n"
+                                    f"Loss today: <b>{dd*100:.1f}%</b> "
+                                    f"(limit {_p.max_daily_drawdown_pct*100:.0f}%)\n"
+                                    f"No new entries until midnight UTC."
+                                )
+                            except Exception:
+                                pass
+                            _dd_halt_alerted = True
+                        # Sleep until next day reset rather than spinning every 5s
+                        time.sleep(60)
                         continue
                 except Exception:
                     pass

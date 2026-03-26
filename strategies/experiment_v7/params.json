@@ -1,24 +1,26 @@
 {
   "_comment": "experiment_v7 — Signal-Driven Directional Scalp on Bybit USDT-perp.",
-  "_why": "MM at VIP 0 costs 0.04% round-trip with no rebate. Directional scalp pays 0.075% (entry taker + TP maker) but targets 0.8% TP — net +0.725% per win. Break-even win rate ≈ 41%.",
 
-  "_comment_signal": "Entry: ob_imbalance AND trade_pressure_5m must both exceed thresholds in same direction.",
-  "ob_imbalance_thresh":   0.25,
-  "pressure_thresh":       0.15,
-  "require_trend_bias":    false,
+  "_comment_signal": "Entry: BOTH ob_imbalance AND trade_pressure_5m must strongly agree.",
+  "_signal_rationale": "Thresholds raised from 0.25/0.15 to 0.55/0.40 to filter noise. Fewer entries but much higher hit rate. require_trend_bias=true adds a third confirmation layer.",
+  "ob_imbalance_thresh": 0.55,
+  "pressure_thresh":     0.40,
+  "require_trend_bias":  true,
 
   "_comment_pos": "TP/SL placed on exchange (set_trading_stop) immediately on fill.",
-  "tp_pct":                0.008,
-  "sl_pct":                0.004,
-  "max_hold_min":          20,
+  "_tp_sl_rationale": "Reduced TP from 0.8% to 0.4% and SL from 0.4% to 0.2%. A 0.4% move within 20 min is realistic for BTCUSDT/ETHUSDT. Net after fees (+0.4% - 0.075%) = +0.325% per win. SL loss: -0.2% - 0.11% = -0.31%. Break-even win rate = 0.31 / (0.325 + 0.31) = 49%.",
+  "tp_pct":              0.004,
+  "sl_pct":              0.002,
+  "max_hold_min":        15,
 
   "_comment_size": "Notional = equity × max_risk_pct / sl_pct, capped at max_notional_usd.",
-  "max_risk_pct":          0.01,
-  "max_notional_usd":      200.0,
+  "_size_rationale": "Reduced max_risk_pct from 1% to 0.5% and max_notional from 200 to 100 while we validate signal quality.",
+  "max_risk_pct":        0.005,
+  "max_notional_usd":    100.0,
 
-  "_comment_freq": "cooldown_sec between entries per symbol. max_open_positions across all.",
-  "cooldown_sec":          60,
-  "max_open_positions":    3,
+  "_comment_freq": "Only 1 position at a time until signals prove reliable. cooldown_sec raised to 120s.",
+  "cooldown_sec":          120,
+  "max_open_positions":    1,
   "scan_interval_sec":     5.0,
 
   "_comment_lev": "5x for BTC/ETH (liquid, tight spread), 3x for others.",
@@ -29,7 +31,7 @@
   },
   "use_cross_margin":      true,
 
-  "max_daily_drawdown_pct": 0.03,
+  "max_daily_drawdown_pct": 0.02,
   "max_loss_streak":        3,
   "loss_streak_pause_min":  30,
 
