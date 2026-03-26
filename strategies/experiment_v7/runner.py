@@ -232,14 +232,22 @@ def _setup_symbol(session: HTTP, symbol: str) -> None:
         LOGGER.info("[DRY RUN] %s: would set %s margin leverage=%dx", symbol, label, lev)
         return
 
+    # switch_margin_mode is not supported on Unified Trading Accounts (UTA).
+    # Bybit error 100028 = "unified account is forbidden" — safe to skip silently.
+    # Non-UTA accounts: tradeMode=0 switches TO cross, tradeMode=1 to isolated.
     try:
         session.switch_margin_mode(
             category="linear", symbol=symbol,
             tradeMode=mode, buyLeverage=lev_str, sellLeverage=lev_str,
         )
-        LOGGER.info("%s: margin → %s", symbol, label)
+        LOGGER.info("%s: margin mode → %s", symbol, label)
     except Exception as exc:
-        LOGGER.debug("%s: switch_margin_mode: %s (may already be set)", symbol, exc)
+        err_str = str(exc)
+        if "100028" in err_str:
+            # UTA account — margin mode is managed account-wide, not per symbol
+            LOGGER.debug("%s: UTA account — skipping per-symbol margin mode switch", symbol)
+        else:
+            LOGGER.debug("%s: switch_margin_mode: %s", symbol, exc)
 
     try:
         session.set_leverage(
@@ -248,7 +256,12 @@ def _setup_symbol(session: HTTP, symbol: str) -> None:
         )
         LOGGER.info("%s: leverage → %dx", symbol, lev)
     except Exception as exc:
-        LOGGER.warning("%s: set_leverage failed: %s", symbol, exc)
+        err_str = str(exc)
+        if "110043" in err_str:
+            # "leverage not modified" — already set to the requested value, nothing to do
+            LOGGER.debug("%s: leverage already at %dx — no change needed", symbol, lev)
+        else:
+            LOGGER.warning("%s: set_leverage failed: %s", symbol, exc)
 
 
 # ── signal evaluation ─────────────────────────────────────────────────────────

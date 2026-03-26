@@ -376,7 +376,8 @@ def _setup_symbol(session: HTTP, symbol: str, bucket: TokenBucket) -> None:
         LOGGER.info("[DRY RUN] %s: would set %s margin leverage=%dx", symbol, mode_str, lev)
         return
 
-    # Switch margin mode (cross/isolated) — must provide leverage values
+    # Switch margin mode (cross/isolated) — must provide leverage values.
+    # Skipped silently for Unified Trading Accounts (UTA, error 100028).
     try:
         bucket.consume(1)
         session.switch_margin_mode(
@@ -386,10 +387,13 @@ def _setup_symbol(session: HTTP, symbol: str, bucket: TokenBucket) -> None:
         )
         LOGGER.info("%s: margin mode → %s", symbol, mode_str)
     except Exception as exc:
-        # Bybit returns an error if the mode is already set — safe to ignore
-        LOGGER.debug("%s: switch_margin_mode: %s (may already be set)", symbol, exc)
+        err_str = str(exc)
+        if "100028" in err_str:
+            LOGGER.debug("%s: UTA account — skipping per-symbol margin mode switch", symbol)
+        else:
+            LOGGER.debug("%s: switch_margin_mode: %s", symbol, exc)
 
-    # Set leverage explicitly (needed even when mode doesn't change)
+    # Set leverage explicitly (needed even when mode doesn't change).
     try:
         bucket.consume(1)
         session.set_leverage(
@@ -398,7 +402,11 @@ def _setup_symbol(session: HTTP, symbol: str, bucket: TokenBucket) -> None:
         )
         LOGGER.info("%s: leverage → %dx", symbol, lev)
     except Exception as exc:
-        LOGGER.warning("%s: set_leverage failed: %s", symbol, exc)
+        err_str = str(exc)
+        if "110043" in err_str:
+            LOGGER.debug("%s: leverage already at %dx — no change needed", symbol, lev)
+        else:
+            LOGGER.warning("%s: set_leverage failed: %s", symbol, exc)
 
 
 def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState,
