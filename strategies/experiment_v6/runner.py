@@ -68,9 +68,13 @@ class Params:
     max_open_quotes:              int   = 2
     signal_ob_imbalance_threshold: float = 0.35
     signal_pressure_threshold:    float = 0.20
+    # ── leverage & margin ─────────────────────────────────────────────────────
+    leverage_default:             int   = 3       # leverage applied to all symbols by default
+    symbol_leverage:              dict  = None    # type: ignore[assignment]  per-symbol overrides e.g. {"BTCUSDT": 5}
+    use_cross_margin:             bool  = True    # True = cross, False = isolated
     # ── position management ───────────────────────────────────────────────────
-    tp_pct:                       float = 0.008   # 0.8% unrealised PnL → take profit
-    sl_pct:                       float = 0.005   # 0.5% unrealised loss → stop loss
+    tp_pct:                       float = 0.008   # 0.8% unrealised PnL → take profit (native exchange stop)
+    sl_pct:                       float = 0.005   # 0.5% unrealised loss → stop loss (native exchange stop)
     max_hold_min:                 int   = 30      # minutes before forced market close
     # ── circuit breakers ─────────────────────────────────────────────────────
     max_daily_drawdown_pct:       float = 0.03
@@ -79,8 +83,13 @@ class Params:
     ws_startup_wait_sec:          float = 5.0
     dry_run:                      bool  = False
 
+    def __post_init__(self) -> None:
+        if self.symbol_leverage is None:
+            self.symbol_leverage = {}
+
 
 _p = Params()
+_p.symbol_leverage = {}
 
 
 def load_params() -> None:
@@ -96,6 +105,9 @@ def load_params() -> None:
     _p.max_open_quotes               = int(d.get("max_open_quotes",                  _p.max_open_quotes))
     _p.signal_ob_imbalance_threshold = float(d.get("signal_ob_imbalance_threshold",  _p.signal_ob_imbalance_threshold))
     _p.signal_pressure_threshold     = float(d.get("signal_pressure_threshold",      _p.signal_pressure_threshold))
+    _p.leverage_default              = int(d.get("leverage_default",                 _p.leverage_default))
+    _p.symbol_leverage               = {str(k): int(v) for k, v in d.get("symbol_leverage", _p.symbol_leverage).items()}
+    _p.use_cross_margin              = bool(d.get("use_cross_margin",                _p.use_cross_margin))
     _p.tp_pct                        = float(d.get("tp_pct",                         _p.tp_pct))
     _p.sl_pct                        = float(d.get("sl_pct",                         _p.sl_pct))
     _p.max_hold_min                  = int(d.get("max_hold_min",                     _p.max_hold_min))
@@ -304,6 +316,103 @@ def _cancel_quotes(session: HTTP, symbol: str,
             setattr(st, oid_attr, None)
 
 
+def _get_leverage(symbol: str) -> int:
+    """Return configured leverage for a symbol, falling back to default."""
+    return _p.symbol_leverage.get(symbol, _p.leverage_default)
+
+
+def _setup_symbol(session: HTTP, symbol: str, bucket: TokenBucket) -> None:
+    """Set cross/isolated margin mode and leverage for a symbol on startup.
+
+    Bybit requires margin mode and leverage to be set together when switching
+    to cross margin.  Errors are logged but never fatal — the bot continues
+    using whatever the account currently has set.
+    """
+    lev = _get_leverage(symbol)
+    lev_str = str(lev)
+    mode_str = "cross" if _p.use_cross_margin else "isolated"
+    trade_mode = 0 if _p.use_cross_margin else 1
+
+    if _p.dry_run:
+        LOGGER.info("[DRY RUN] %s: would set %s margin leverage=%dx", symbol, mode_str, lev)
+        return
+
+    # Switch margin mode (cross/isolated) — must provide leverage values
+    try:
+        bucket.consume(1)
+        session.switch_margin_mode(
+            category="linear", symbol=symbol,
+            tradeMode=trade_mode,
+            buyLeverage=lev_str, sellLeverage=lev_str,
+        )
+        LOGGER.info("%s: margin mode → %s", symbol, mode_str)
+    except Exception as exc:
+        # Bybit returns an error if the mode is already set — safe to ignore
+        LOGGER.debug("%s: switch_margin_mode: %s (may already be set)", symbol, exc)
+
+    # Set leverage explicitly (needed even when mode doesn't change)
+    try:
+        bucket.consume(1)
+        session.set_leverage(
+            category="linear", symbol=symbol,
+            buyLeverage=lev_str, sellLeverage=lev_str,
+        )
+        LOGGER.info("%s: leverage → %dx", symbol, lev)
+    except Exception as exc:
+        LOGGER.warning("%s: set_leverage failed: %s", symbol, exc)
+
+
+def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState,
+                      bucket: TokenBucket) -> None:
+    """Place exchange-level TP and SL via set_trading_stop immediately when a
+    position opens.
+
+    Using native stops means they execute at the exchange even if the bot
+    disconnects.  The polling _manage_position still handles max-hold timeout
+    and acts as an emergency backup.
+    """
+    if st.entry_price <= 0 or st.net_pos_qty == 0.0:
+        return
+
+    is_long = st.net_pos_qty > 0
+    tick    = _tick_cache.get(symbol, "0.01")
+
+    if is_long:
+        tp_price = _round_price(st.entry_price * (1.0 + _p.tp_pct), tick, up=True)
+        sl_price = _round_price(st.entry_price * (1.0 - _p.sl_pct), tick, up=False)
+    else:
+        tp_price = _round_price(st.entry_price * (1.0 - _p.tp_pct), tick, up=False)
+        sl_price = _round_price(st.entry_price * (1.0 + _p.sl_pct), tick, up=True)
+
+    direction = "Long" if is_long else "Short"
+    LOGGER.info(
+        "%s: setting native TP=%s SL=%s | entry=%.4f %s",
+        symbol, tp_price, sl_price, st.entry_price, direction,
+    )
+
+    if _p.dry_run:
+        LOGGER.info("[DRY RUN] %s: would call set_trading_stop TP=%s SL=%s",
+                    symbol, tp_price, sl_price)
+        return
+
+    try:
+        bucket.consume(1)
+        session.set_trading_stop(
+            category="linear", symbol=symbol,
+            takeProfit=tp_price,
+            stopLoss=sl_price,
+            tpTriggerBy="MarkPrice",
+            slTriggerBy="MarkPrice",
+            positionIdx=0,
+        )
+        LOGGER.info("%s: native TP/SL confirmed on exchange", symbol)
+    except Exception as exc:
+        LOGGER.warning(
+            "%s: set_trading_stop failed: %s — polling fallback active",
+            symbol, exc,
+        )
+
+
 def _cancel_all_symbols(session: HTTP, states: dict[str, SymbolState],
                         bucket: TokenBucket) -> None:
     LOGGER.info("Cancelling all quotes …")
@@ -350,109 +459,45 @@ def _market_close(session: HTTP, symbol: str, st: SymbolState,
 def _manage_position(session: HTTP, symbol: str, st: SymbolState,
                      sig: MarketSignal, bucket: TokenBucket,
                      now: datetime) -> bool:
-    """Check TP / SL / max-hold for an open position.
+    """Backup position management — runs every cycle as a safety net.
 
-    Returns True if a close action was taken (caller should skip quoting
-    for this symbol this cycle).
+    Primary TP/SL are handled natively on the exchange via set_trading_stop
+    (called immediately when a position opens).  This function handles:
+      1. max_hold_min timeout  — exchange has no time-based stops.
+      2. Emergency backup SL   — fires at 2× sl_pct in case the native stop
+                                 somehow did not execute (e.g. extreme gap).
+
+    Returns True if a market-close was issued this cycle.
     """
     if st.net_pos_qty == 0.0 or st.entry_price <= 0:
         return False
 
-    mid        = sig.mid
-    is_long    = st.net_pos_qty > 0
-    pnl_pct    = ((mid - st.entry_price) / st.entry_price) if is_long \
-                 else ((st.entry_price - mid) / st.entry_price)
+    mid     = sig.mid
+    is_long = st.net_pos_qty > 0
+    pnl_pct = ((mid - st.entry_price) / st.entry_price) if is_long \
+              else ((st.entry_price - mid) / st.entry_price)
 
-    # ── Stop loss ────────────────────────────────────────────────────────────
-    if pnl_pct <= -_p.sl_pct:
-        # Cancel any pending TP order first.
-        if st.tp_order_id:
-            try:
-                bucket.consume(1)
-                session.cancel_order(category="linear", symbol=symbol,
-                                     orderId=st.tp_order_id)
-            except Exception:
-                pass
-            st.tp_order_id = None
-        _cancel_quotes(session, symbol, st, bucket)
-        _market_close(session, symbol, st, bucket,
-                      f"SL hit pnl={pnl_pct*100:.2f}%")
-        return True
-
-    # ── Max-hold timeout ─────────────────────────────────────────────────────
+    # ── Max-hold timeout (exchange cannot do time-based stops) ────────────────
     if st.position_open_ts is not None:
         age_min = (now - st.position_open_ts).total_seconds() / 60.0
         if age_min >= _p.max_hold_min:
-            if st.tp_order_id:
-                try:
-                    bucket.consume(1)
-                    session.cancel_order(category="linear", symbol=symbol,
-                                         orderId=st.tp_order_id)
-                except Exception:
-                    pass
-                st.tp_order_id = None
             _cancel_quotes(session, symbol, st, bucket)
             _market_close(session, symbol, st, bucket,
                           f"max-hold {age_min:.0f}m >= {_p.max_hold_min}m")
             return True
 
-    # ── Take profit ──────────────────────────────────────────────────────────
-    if pnl_pct >= _p.tp_pct:
-        # If TP limit already placed, check whether it's still live.
-        if st.tp_order_id:
-            try:
-                bucket.consume(1)
-                resp  = session.get_order(
-                    category="linear", symbol=symbol, orderId=st.tp_order_id)
-                state = resp.get("result", {}).get("orderStatus", "")
-                if state in ("Filled", "Cancelled", "Deactivated"):
-                    st.tp_order_id = None
-                    # Filled → position will clear on next position poll; allow
-                    # normal quoting to resume.
-                else:
-                    # Still pending — stay quiet this cycle.
-                    return True
-            except Exception:
-                st.tp_order_id = None
+    # ── Emergency backup SL (2× threshold — native stop should fire first) ───
+    emergency_sl = _p.sl_pct * 2.0
+    if pnl_pct <= -emergency_sl:
+        _cancel_quotes(session, symbol, st, bucket)
+        _market_close(session, symbol, st, bucket,
+                      f"emergency SL pnl={pnl_pct*100:.2f}% (native stop missed)")
+        return True
 
-        if st.tp_order_id is None:
-            # Place a PostOnly limit at a tick inside the best price so it
-            # should fill quickly as a maker, collecting the rebate.
-            tick = _tick_cache.get(symbol, "0.01")
-            if is_long:
-                tp_price = _round_price(sig.ask if sig.ask > 0 else mid, tick, up=False)
-            else:
-                tp_price = _round_price(sig.bid if sig.bid > 0 else mid, tick, up=True)
-
-            qty = abs(st.net_pos_qty)
-            LOGGER.info("%s: TP triggered pnl=%.2f%% — limit close %s qty=%.6f @ %s",
-                        symbol, pnl_pct * 100,
-                        "Sell" if is_long else "Buy", qty, tp_price)
-            if _p.dry_run:
-                LOGGER.info("[DRY RUN] %s: would place TP limit", symbol)
-                return True
-            try:
-                _cancel_quotes(session, symbol, st, bucket)
-                bucket.consume(1)
-                r = session.place_order(
-                    category="linear", symbol=symbol,
-                    side="Sell" if is_long else "Buy",
-                    orderType="Limit",
-                    price=tp_price,
-                    qty=str(qty),
-                    timeInForce="PostOnly",
-                    reduceOnly=True,
-                )
-                st.tp_order_id = r["result"]["orderId"]
-                return True   # pause quoting until TP resolves
-            except Exception as exc:
-                LOGGER.warning("%s: TP limit failed: %s — falling back to market", symbol, exc)
-                _market_close(session, symbol, st, bucket, "TP market fallback")
-                return True
-
-    # Log unrealised PnL periodically at DEBUG so it's visible in log files.
-    LOGGER.debug("%s: pos=%.6f entry=%.4f mid=%.4f pnl=%+.2f%%",
-                 symbol, st.net_pos_qty, st.entry_price, mid, pnl_pct * 100)
+    LOGGER.debug("%s: pos=%.6f entry=%.4f mid=%.4f pnl=%+.2f%%  age=%.0fm",
+                 symbol, st.net_pos_qty, st.entry_price, mid, pnl_pct * 100,
+                 (now - st.position_open_ts).total_seconds() / 60.0
+                 if st.position_open_ts else 0)
     return False
 
 
@@ -503,6 +548,14 @@ def main() -> None:
 
     states:     dict[str, SymbolState] = {s: SymbolState() for s in symbols}
     bucket      = TokenBucket(rate=float(_p.max_orders_per_sec))
+
+    # ── configure leverage and margin mode per symbol ─────────────────────────
+    LOGGER.info("Configuring leverage / margin mode for %d symbols …", len(symbols))
+    for sym in symbols:
+        try:
+            _setup_symbol(session, sym, bucket)
+        except Exception as exc:
+            LOGGER.warning("%s: setup failed: %s", sym, exc)
 
     # ── shutdown handler ──────────────────────────────────────────────────────
     _shutdown = threading.Event()
@@ -612,13 +665,18 @@ def main() -> None:
                     new_qty = float(pos.get("size") or 0)
                     if pos.get("side") == "Sell":
                         new_qty = -new_qty
-                    # Stamp open time when a new position appears
-                    if st.net_pos_qty == 0.0 and new_qty != 0.0:
-                        st.position_open_ts = now
-                        LOGGER.info("%s: position opened — size=%.6f entry=%.4f",
-                                    sym, new_qty, float(pos.get("avgPrice") or 0))
+                    # Stamp open time and set native TP/SL when a new position appears
+                    is_new_position = st.net_pos_qty == 0.0 and new_qty != 0.0
                     st.net_pos_qty = new_qty
                     st.entry_price = float(pos.get("avgPrice") or 0)
+                    if is_new_position:
+                        st.position_open_ts = now
+                        LOGGER.info("%s: position opened — size=%.6f entry=%.4f  lev=%dx",
+                                    sym, new_qty, st.entry_price, _get_leverage(sym))
+                        try:
+                            _set_native_tp_sl(session, sym, st, bucket)
+                        except Exception as exc:
+                            LOGGER.warning("%s: _set_native_tp_sl error: %s", sym, exc)
                 else:
                     if st.net_pos_qty != 0.0:
                         LOGGER.info("%s: position closed (external fill / TP resolved)", sym)
@@ -648,10 +706,6 @@ def main() -> None:
                     LOGGER.debug("%s: no market data yet — skip", sym)
                     continue
                 st = states[sym]
-                # Skip quoting if a TP limit order is pending for this symbol
-                if st.tp_order_id is not None:
-                    LOGGER.debug("%s: TP order pending — skipping quote refresh", sym)
-                    continue
                 try:
                     _quote_symbol(session, sym, sig, st, bucket)
                 except Exception as exc:

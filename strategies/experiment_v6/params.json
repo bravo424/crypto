@@ -12,7 +12,15 @@
   "signal_ob_imbalance_threshold": 0.35,
   "signal_pressure_threshold":     0.20,
 
-  "_comment_pos": "Position management: TP/SL/timeout applied to every open inventory position.",
+  "_comment_lev": "Leverage: 5x for BTC/ETH (liquid, tight spreads), 3x default for others. use_cross_margin=true shares account balance as collateral.",
+  "leverage_default":              3,
+  "symbol_leverage": {
+    "BTCUSDT": 5,
+    "ETHUSDT": 5
+  },
+  "use_cross_margin":              true,
+
+  "_comment_pos": "Position management. Native TP/SL set on exchange via set_trading_stop on fill. max_hold_min is a time-based backup (exchange has no time stops).",
   "tp_pct":                        0.008,
   "sl_pct":                        0.005,
   "max_hold_min":                  30,

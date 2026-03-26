@@ -181,23 +181,32 @@ run-strat experiment_v5 --exchange bithumb --clear-pause
 #   Fee viability (VIP 0): half_spread must be > 0.02% (break-even).
 #   Default half_spread = 0.04% (full spread 0.08% — net ~0.04% per round trip).
 #
+#   Leverage & margin mode
+#   ──────────────────────
+#   Set on startup automatically for every symbol.  Cross margin means all
+#   positions share your full account balance as collateral — much safer for
+#   market making than isolated (which liquidates each position independently).
+#
+#   leverage_default   3×  (all symbols unless overridden)
+#   symbol_leverage    {"BTCUSDT": 5, "ETHUSDT": 5}  — liquid, tight-spread pairs
+#   use_cross_margin   true  (cross) / false (isolated)
+#
 #   Position management (TP / SL / timeout)
 #   ─────────────────────────────────────────
-#   Every open inventory position is actively managed each cycle:
+#   Primary TP and SL are placed on the exchange immediately when a position
+#   fills (set_trading_stop API).  They execute even if the bot disconnects.
 #
 #   tp_pct        (default 0.008 = 0.8%)
-#     When unrealised PnL reaches +0.8%, cancel open quotes and place a
-#     PostOnly limit close at best ask/bid to collect the maker rebate.
-#     Quoting for the symbol is paused until the TP order resolves.
+#     Native exchange TP: close at +0.8% from entry price (mark price trigger).
 #
 #   sl_pct        (default 0.005 = 0.5%)
-#     When unrealised PnL drops to -0.5%, immediately close at market (IOC).
-#     All open quotes for the symbol are cancelled first.
+#     Native exchange SL: close at -0.5% from entry price (mark price trigger).
+#     Emergency backup: if native SL somehow misses, bot fires a market close
+#     at -1.0% (2× sl_pct) as a last resort.
 #
 #   max_hold_min  (default 30)
-#     If a position has been open for 30 minutes without resolving,
-#     close at market regardless of PnL.  Prevents holding stale inventory
-#     through major market moves.
+#     Bybit has no time-based stops, so the bot force-closes at market if a
+#     position has been open for 30 minutes without resolving.
 #
 #   Tune these in strategies/experiment_v6/params.json.
 
