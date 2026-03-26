@@ -68,6 +68,11 @@ class Params:
     max_open_quotes:              int   = 2
     signal_ob_imbalance_threshold: float = 0.35
     signal_pressure_threshold:    float = 0.20
+    # ── position management ───────────────────────────────────────────────────
+    tp_pct:                       float = 0.008   # 0.8% unrealised PnL → take profit
+    sl_pct:                       float = 0.005   # 0.5% unrealised loss → stop loss
+    max_hold_min:                 int   = 30      # minutes before forced market close
+    # ── circuit breakers ─────────────────────────────────────────────────────
     max_daily_drawdown_pct:       float = 0.03
     max_loss_streak:              int   = 3
     loss_streak_pause_min:        int   = 30
@@ -91,6 +96,9 @@ def load_params() -> None:
     _p.max_open_quotes               = int(d.get("max_open_quotes",                  _p.max_open_quotes))
     _p.signal_ob_imbalance_threshold = float(d.get("signal_ob_imbalance_threshold",  _p.signal_ob_imbalance_threshold))
     _p.signal_pressure_threshold     = float(d.get("signal_pressure_threshold",      _p.signal_pressure_threshold))
+    _p.tp_pct                        = float(d.get("tp_pct",                         _p.tp_pct))
+    _p.sl_pct                        = float(d.get("sl_pct",                         _p.sl_pct))
+    _p.max_hold_min                  = int(d.get("max_hold_min",                     _p.max_hold_min))
     _p.max_daily_drawdown_pct        = float(d.get("max_daily_drawdown_pct",         _p.max_daily_drawdown_pct))
     _p.max_loss_streak               = int(d.get("max_loss_streak",                  _p.max_loss_streak))
     _p.loss_streak_pause_min         = int(d.get("loss_streak_pause_min",            _p.loss_streak_pause_min))
@@ -197,10 +205,13 @@ class SymbolState:
     """Tracks live quote order IDs and inventory for one symbol."""
 
     def __init__(self) -> None:
-        self.bid_id:      str | None = None
-        self.ask_id:      str | None = None
-        self.net_pos_qty: float      = 0.0   # refreshed from live positions
-        self.entry_price: float      = 0.0
+        self.bid_id:          str | None      = None
+        self.ask_id:          str | None      = None
+        self.net_pos_qty:     float           = 0.0   # refreshed from live positions
+        self.entry_price:     float           = 0.0
+        # position management
+        self.position_open_ts: datetime | None = None  # when this position was first detected
+        self.tp_order_id:      str | None      = None  # pending TP limit order
 
 
 def _quote_symbol(session: HTTP, symbol: str, sig: MarketSignal,
@@ -304,6 +315,145 @@ def _cancel_all_symbols(session: HTTP, states: dict[str, SymbolState],
         LOGGER.info("cancel_all_orders sent.")
     except Exception as exc:
         LOGGER.warning("cancel_all_orders failed: %s", exc)
+
+
+def _market_close(session: HTTP, symbol: str, st: SymbolState,
+                  bucket: TokenBucket, reason: str) -> bool:
+    """Place an IOC market order to flatten the position.  Returns True on success."""
+    qty = abs(st.net_pos_qty)
+    if qty <= 0:
+        return False
+    close_side = "Sell" if st.net_pos_qty > 0 else "Buy"
+    LOGGER.warning("%s: %s — market close %s qty=%.6f entry=%.4f",
+                   symbol, reason, close_side, qty, st.entry_price)
+    if _p.dry_run:
+        LOGGER.info("[DRY RUN] %s: would market-close %s qty=%.6f", symbol, close_side, qty)
+        return True
+    try:
+        bucket.consume(1)
+        session.place_order(
+            category="linear", symbol=symbol,
+            side=close_side, orderType="Market",
+            qty=str(qty), timeInForce="IOC",
+            reduceOnly=True,
+        )
+        st.net_pos_qty  = 0.0
+        st.entry_price  = 0.0
+        st.position_open_ts = None
+        st.tp_order_id  = None
+        return True
+    except Exception as exc:
+        LOGGER.error("%s: market close failed: %s", symbol, exc)
+        return False
+
+
+def _manage_position(session: HTTP, symbol: str, st: SymbolState,
+                     sig: MarketSignal, bucket: TokenBucket,
+                     now: datetime) -> bool:
+    """Check TP / SL / max-hold for an open position.
+
+    Returns True if a close action was taken (caller should skip quoting
+    for this symbol this cycle).
+    """
+    if st.net_pos_qty == 0.0 or st.entry_price <= 0:
+        return False
+
+    mid        = sig.mid
+    is_long    = st.net_pos_qty > 0
+    pnl_pct    = ((mid - st.entry_price) / st.entry_price) if is_long \
+                 else ((st.entry_price - mid) / st.entry_price)
+
+    # ── Stop loss ────────────────────────────────────────────────────────────
+    if pnl_pct <= -_p.sl_pct:
+        # Cancel any pending TP order first.
+        if st.tp_order_id:
+            try:
+                bucket.consume(1)
+                session.cancel_order(category="linear", symbol=symbol,
+                                     orderId=st.tp_order_id)
+            except Exception:
+                pass
+            st.tp_order_id = None
+        _cancel_quotes(session, symbol, st, bucket)
+        _market_close(session, symbol, st, bucket,
+                      f"SL hit pnl={pnl_pct*100:.2f}%")
+        return True
+
+    # ── Max-hold timeout ─────────────────────────────────────────────────────
+    if st.position_open_ts is not None:
+        age_min = (now - st.position_open_ts).total_seconds() / 60.0
+        if age_min >= _p.max_hold_min:
+            if st.tp_order_id:
+                try:
+                    bucket.consume(1)
+                    session.cancel_order(category="linear", symbol=symbol,
+                                         orderId=st.tp_order_id)
+                except Exception:
+                    pass
+                st.tp_order_id = None
+            _cancel_quotes(session, symbol, st, bucket)
+            _market_close(session, symbol, st, bucket,
+                          f"max-hold {age_min:.0f}m >= {_p.max_hold_min}m")
+            return True
+
+    # ── Take profit ──────────────────────────────────────────────────────────
+    if pnl_pct >= _p.tp_pct:
+        # If TP limit already placed, check whether it's still live.
+        if st.tp_order_id:
+            try:
+                bucket.consume(1)
+                resp  = session.get_order(
+                    category="linear", symbol=symbol, orderId=st.tp_order_id)
+                state = resp.get("result", {}).get("orderStatus", "")
+                if state in ("Filled", "Cancelled", "Deactivated"):
+                    st.tp_order_id = None
+                    # Filled → position will clear on next position poll; allow
+                    # normal quoting to resume.
+                else:
+                    # Still pending — stay quiet this cycle.
+                    return True
+            except Exception:
+                st.tp_order_id = None
+
+        if st.tp_order_id is None:
+            # Place a PostOnly limit at a tick inside the best price so it
+            # should fill quickly as a maker, collecting the rebate.
+            tick = _tick_cache.get(symbol, "0.01")
+            if is_long:
+                tp_price = _round_price(sig.ask if sig.ask > 0 else mid, tick, up=False)
+            else:
+                tp_price = _round_price(sig.bid if sig.bid > 0 else mid, tick, up=True)
+
+            qty = abs(st.net_pos_qty)
+            LOGGER.info("%s: TP triggered pnl=%.2f%% — limit close %s qty=%.6f @ %s",
+                        symbol, pnl_pct * 100,
+                        "Sell" if is_long else "Buy", qty, tp_price)
+            if _p.dry_run:
+                LOGGER.info("[DRY RUN] %s: would place TP limit", symbol)
+                return True
+            try:
+                _cancel_quotes(session, symbol, st, bucket)
+                bucket.consume(1)
+                r = session.place_order(
+                    category="linear", symbol=symbol,
+                    side="Sell" if is_long else "Buy",
+                    orderType="Limit",
+                    price=tp_price,
+                    qty=str(qty),
+                    timeInForce="PostOnly",
+                    reduceOnly=True,
+                )
+                st.tp_order_id = r["result"]["orderId"]
+                return True   # pause quoting until TP resolves
+            except Exception as exc:
+                LOGGER.warning("%s: TP limit failed: %s — falling back to market", symbol, exc)
+                _market_close(session, symbol, st, bucket, "TP market fallback")
+                return True
+
+    # Log unrealised PnL periodically at DEBUG so it's visible in log files.
+    LOGGER.debug("%s: pos=%.6f entry=%.4f mid=%.4f pnl=%+.2f%%",
+                 symbol, st.net_pos_qty, st.entry_price, mid, pnl_pct * 100)
+    return False
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -454,20 +604,42 @@ def main() -> None:
                             except Exception:
                                 pass
 
-            # Update per-symbol position state
+            # Update per-symbol position state and stamp open timestamp
             for sym in symbols:
                 pos = live_positions.get(sym)
                 st  = states[sym]
                 if pos:
-                    st.net_pos_qty = float(pos.get("size") or 0)
+                    new_qty = float(pos.get("size") or 0)
                     if pos.get("side") == "Sell":
-                        st.net_pos_qty = -st.net_pos_qty
+                        new_qty = -new_qty
+                    # Stamp open time when a new position appears
+                    if st.net_pos_qty == 0.0 and new_qty != 0.0:
+                        st.position_open_ts = now
+                        LOGGER.info("%s: position opened — size=%.6f entry=%.4f",
+                                    sym, new_qty, float(pos.get("avgPrice") or 0))
+                    st.net_pos_qty = new_qty
                     st.entry_price = float(pos.get("avgPrice") or 0)
                 else:
-                    st.net_pos_qty = 0.0
-                    st.entry_price = 0.0
+                    if st.net_pos_qty != 0.0:
+                        LOGGER.info("%s: position closed (external fill / TP resolved)", sym)
+                    st.net_pos_qty      = 0.0
+                    st.entry_price      = 0.0
+                    st.position_open_ts = None
+                    st.tp_order_id      = None
 
             prev_positions = live_positions
+
+            # ── position management (TP / SL / timeout) ──────────────────────
+            for sym in symbols:
+                sig = store.get(sym)
+                if sig is None or sig.mid <= 0:
+                    continue
+                st = states[sym]
+                if st.net_pos_qty != 0.0:
+                    try:
+                        _manage_position(session, sym, st, sig, bucket, now)
+                    except Exception as exc:
+                        LOGGER.warning("%s: position management error: %s", sym, exc)
 
             # ── quote refresh ─────────────────────────────────────────────────
             for sym in symbols:
@@ -475,8 +647,13 @@ def main() -> None:
                 if sig is None or sig.mid <= 0:
                     LOGGER.debug("%s: no market data yet — skip", sym)
                     continue
+                st = states[sym]
+                # Skip quoting if a TP limit order is pending for this symbol
+                if st.tp_order_id is not None:
+                    LOGGER.debug("%s: TP order pending — skipping quote refresh", sym)
+                    continue
                 try:
-                    _quote_symbol(session, sym, sig, states[sym], bucket)
+                    _quote_symbol(session, sym, sig, st, bucket)
                 except Exception as exc:
                     LOGGER.warning("%s: quoting error: %s", sym, exc)
 

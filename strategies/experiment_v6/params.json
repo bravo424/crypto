@@ -1,23 +1,29 @@
 {
   "_comment": "experiment_v6 — signal-enhanced market making. VIP 0 fee: maker 0.02%, taker 0.055%.",
 
-  "half_spread_pct":             0.0004,
-  "max_inventory_notional":      100.0,
-  "inventory_skew_factor":       0.5,
-  "quote_qty_usd":               15.0,
-  "quote_refresh_sec":           2.0,
-  "max_orders_per_sec":          8,
-  "max_open_quotes":             2,
+  "half_spread_pct":               0.0004,
+  "max_inventory_notional":        100.0,
+  "inventory_skew_factor":         0.5,
+  "quote_qty_usd":                 15.0,
+  "quote_refresh_sec":             2.0,
+  "max_orders_per_sec":            8,
+  "max_open_quotes":               2,
 
   "signal_ob_imbalance_threshold": 0.35,
   "signal_pressure_threshold":     0.20,
 
-  "max_daily_drawdown_pct":      0.03,
-  "max_loss_streak":             3,
-  "loss_streak_pause_min":       30,
+  "_comment_pos": "Position management: TP/SL/timeout applied to every open inventory position.",
+  "tp_pct":                        0.008,
+  "sl_pct":                        0.005,
+  "max_hold_min":                  30,
 
-  "symbols_csv":  "market_data/symbol_list.csv",
-  "ws_startup_wait_sec": 5,
+  "max_daily_drawdown_pct":        0.03,
+  "max_loss_streak":               3,
+  "loss_streak_pause_min":         30,
 
-  "dry_run": false
+  "symbols_csv":                   "market_data/symbol_list.csv",
+  "ws_startup_wait_sec":           5,
+
+  "dry_run": false,
+  "_backtest_note": "based on backtest net_pnl=+42.8854 sharpe=67.970 symbol=ETHUSDT"
 }

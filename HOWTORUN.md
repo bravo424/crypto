@@ -180,17 +180,37 @@ run-strat experiment_v5 --exchange bithumb --clear-pause
 #
 #   Fee viability (VIP 0): half_spread must be > 0.02% (break-even).
 #   Default half_spread = 0.04% (full spread 0.08% — net ~0.04% per round trip).
+#
+#   Position management (TP / SL / timeout)
+#   ─────────────────────────────────────────
+#   Every open inventory position is actively managed each cycle:
+#
+#   tp_pct        (default 0.008 = 0.8%)
+#     When unrealised PnL reaches +0.8%, cancel open quotes and place a
+#     PostOnly limit close at best ask/bid to collect the maker rebate.
+#     Quoting for the symbol is paused until the TP order resolves.
+#
+#   sl_pct        (default 0.005 = 0.5%)
+#     When unrealised PnL drops to -0.5%, immediately close at market (IOC).
+#     All open quotes for the symbol are cancelled first.
+#
+#   max_hold_min  (default 30)
+#     If a position has been open for 30 minutes without resolving,
+#     close at market regardless of PnL.  Prevents holding stale inventory
+#     through major market moves.
+#
+#   Tune these in strategies/experiment_v6/params.json.
 
 # Run live
 run-strat experiment_v6
 
-# Dry run (no real orders, prints quotes to log)
+# Dry run (no real orders, prints quotes + TP/SL decisions to log)
 run-strat experiment_v6 --dry-run
 
 # One quoting cycle only (smoke-test)
 run-strat experiment_v6 --once --dry-run
 
-# Debug logging (shows every quote and signal value)
+# Debug logging (shows every quote, signal value, and unrealised PnL)
 run-strat experiment_v6 --debug --dry-run
 
 # ── backtest ──────────────────────────────────────────────────────────────────
