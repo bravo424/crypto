@@ -20,9 +20,13 @@
   },
   "use_cross_margin":              true,
 
-  "_comment_pos": "Position management. Native TP/SL set on exchange via set_trading_stop on fill. max_hold_min is a time-based backup (exchange has no time stops).",
+  "_comment_pos": "Native TP/SL via set_trading_stop on fill. max_hold_min = backup market close.",
+  "_comment_tp_fees": "tp_cover_round_trip_fees: TP distance is max(tp_pct, fee_floor). fee_floor = 2×maker(0.02%) + buffer if tp_exit_assume_taker=false; else maker+taker. Set tp_pct small (e.g. 0.0005) and enable cover to 'take profit just above fees'. SL unchanged.",
   "tp_pct":                        0.008,
   "sl_pct":                        0.005,
+  "tp_cover_round_trip_fees":      false,
+  "tp_fee_buffer_pct":             0.0001,
+  "tp_exit_assume_taker":          false,
   "max_hold_min":                  30,
 
   "max_daily_drawdown_pct":        0.03,

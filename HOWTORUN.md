@@ -208,6 +208,13 @@ run-strat experiment_v5 --exchange bithumb --clear-pause
 #     Bybit has no time-based stops, so the bot force-closes at market if a
 #     position has been open for 30 minutes without resolving.
 #
+#   tp_cover_round_trip_fees  (default false)
+#     When true, TP distance is max(tp_pct, fee_floor).  Fee floor is
+#     2× maker (0.04%) + tp_fee_buffer_pct if both entry and TP exit are maker;
+#     set tp_exit_assume_taker=true to use maker+taker (stricter floor).
+#     Use a small tp_pct (e.g. 0.0005) with cover enabled to aim for net > 0
+#     after fees.  SL (sl_pct) is always set the same way as before.
+#
 #   Tune these in strategies/experiment_v6/params.json.
 
 # Run live

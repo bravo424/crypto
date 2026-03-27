@@ -25,6 +25,12 @@ Fee viability (VIP 0)
   Round-trip = 0.04%.
   Default half_spread = 0.04%, full spread = 0.08% → net = 0.04% per round trip.
   Min viable half_spread = 0.02% (break-even) — params default is 0.04%.
+
+  Optional ``tp_cover_round_trip_fees``: native TP distance is
+  max(tp_pct, 2×maker + tp_fee_buffer_pct) so the *gross* take-profit move
+  covers fees if entry and TP exit are both maker.  This is not colocated HFT;
+  tight TPs still face adverse selection and tick-size floors on illiquid symbols.
+  SL (sl_pct) is unchanged — always set alongside TP via set_trading_stop.
 """
 from __future__ import annotations
 
@@ -75,8 +81,11 @@ class Params:
     symbol_leverage:              dict  = None    # type: ignore[assignment]  per-symbol overrides e.g. {"BTCUSDT": 5}
     use_cross_margin:             bool  = True    # True = cross, False = isolated
     # ── position management ───────────────────────────────────────────────────
-    tp_pct:                       float = 0.008   # 0.8% unrealised PnL → take profit (native exchange stop)
-    sl_pct:                       float = 0.005   # 0.5% unrealised loss → stop loss (native exchange stop)
+    tp_pct:                       float = 0.008   # take-profit distance from entry (price %)
+    sl_pct:                       float = 0.005   # stop-loss distance from entry (price %)
+    tp_cover_round_trip_fees:     bool  = False    # if True, TP % ≥ 2×maker + buffer (see docstring)
+    tp_fee_buffer_pct:            float = 0.0001   # extra TP % beyond 2× MAKER_FEE when cover is on
+    tp_exit_assume_taker:         bool  = False    # if True, floor uses maker+taker (TP exits as taker)
     max_hold_min:                 int   = 30      # minutes before forced market close
     # ── circuit breakers ─────────────────────────────────────────────────────
     max_daily_drawdown_pct:       float = 0.03
@@ -115,6 +124,9 @@ def load_params() -> None:
     _p.use_cross_margin              = bool(d.get("use_cross_margin",                _p.use_cross_margin))
     _p.tp_pct                        = float(d.get("tp_pct",                         _p.tp_pct))
     _p.sl_pct                        = float(d.get("sl_pct",                         _p.sl_pct))
+    _p.tp_cover_round_trip_fees      = bool(d.get("tp_cover_round_trip_fees",       _p.tp_cover_round_trip_fees))
+    _p.tp_fee_buffer_pct             = float(d.get("tp_fee_buffer_pct",              _p.tp_fee_buffer_pct))
+    _p.tp_exit_assume_taker          = bool(d.get("tp_exit_assume_taker",           _p.tp_exit_assume_taker))
     _p.max_hold_min                  = int(d.get("max_hold_min",                     _p.max_hold_min))
     _p.max_daily_drawdown_pct        = float(d.get("max_daily_drawdown_pct",         _p.max_daily_drawdown_pct))
     _p.max_loss_streak               = int(d.get("max_loss_streak",                  _p.max_loss_streak))
@@ -130,6 +142,24 @@ def load_params() -> None:
         LOGGER.warning("half_spread_pct %.4f%% < min %.4f%% — clamping",
                        _p.half_spread_pct * 100, min_half * 100)
         _p.half_spread_pct = min_half
+
+
+def _effective_tp_pct() -> float:
+    """TP distance from entry: optional floor so gross move covers VIP0 fees."""
+    base = _p.tp_pct
+    if not _p.tp_cover_round_trip_fees:
+        return base
+    if _p.tp_exit_assume_taker:
+        floor = MAKER_FEE + TAKER_FEE + _p.tp_fee_buffer_pct
+    else:
+        floor = 2.0 * MAKER_FEE + _p.tp_fee_buffer_pct
+    eff = max(base, floor)
+    if eff > base:
+        LOGGER.info(
+            "tp_fee_recovery: tp_pct raised %.5f%% → %.5f%% (fee floor %.5f%%)",
+            base * 100, eff * 100, floor * 100,
+        )
+    return eff
 
 
 # ── token bucket rate limiter ─────────────────────────────────────────────────
@@ -423,12 +453,13 @@ def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState,
 
     is_long = st.net_pos_qty > 0
     tick    = _tick_cache.get(symbol, "0.01")
+    tp_pct  = _effective_tp_pct()
 
     if is_long:
-        tp_price = _round_price(st.entry_price * (1.0 + _p.tp_pct), tick, up=True)
+        tp_price = _round_price(st.entry_price * (1.0 + tp_pct), tick, up=True)
         sl_price = _round_price(st.entry_price * (1.0 - _p.sl_pct), tick, up=False)
     else:
-        tp_price = _round_price(st.entry_price * (1.0 - _p.tp_pct), tick, up=False)
+        tp_price = _round_price(st.entry_price * (1.0 - tp_pct), tick, up=False)
         sl_price = _round_price(st.entry_price * (1.0 + _p.sl_pct), tick, up=True)
 
     direction = "Long" if is_long else "Short"
