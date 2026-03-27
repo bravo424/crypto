@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import signal
 import threading
 import time
@@ -205,6 +206,17 @@ def _fetch_fees(session: HTTP, since: datetime, until: datetime) -> float:
     except Exception as exc:
         LOGGER.warning("_fetch_fees: %s", exc)
     return total
+
+
+def _fetch_closed_pnl(session: HTTP, symbol: str) -> dict | None:
+    """Return the most recent closed P&L record for a symbol from Bybit."""
+    try:
+        resp  = session.get_closed_pnl(category="linear", symbol=symbol, limit=1)
+        items = resp.get("result", {}).get("list", [])
+        return items[0] if items else None
+    except Exception as exc:
+        LOGGER.warning("%s: get_closed_pnl failed: %s", symbol, exc)
+        return None
 
 
 def _get_positions(session: HTTP) -> dict[str, dict]:
@@ -439,6 +451,14 @@ def main() -> None:
         chat_id=settings.telegram_chat_id,
     )
 
+    # Second alerter for per-position updates (uses position_bot_token / POSITION_BOT_CHAT_ID)
+    _pos_token_path = Path(os.getenv("POSITION_BOT_CREDENTIALS_FILE", "config/position_bot_token"))
+    _pos_token      = _pos_token_path.read_text(encoding="utf-8").strip() if _pos_token_path.exists() else None
+    position_alerter = TelegramAlerter.from_env(
+        token=_pos_token,
+        chat_id=os.getenv("POSITION_BOT_CHAT_ID"),
+    )
+
     # ── start market data ─────────────────────────────────────────────────────
     md.start_market_data()
     LOGGER.info("Waiting %.0fs for WebSocket to populate …", _p.ws_startup_wait_sec)
@@ -490,6 +510,7 @@ def main() -> None:
     _now0               = datetime.now(tz=UTC)
     periodic_alert_ts:  datetime = _now0
     periodic_alert_eq:  float    = 0.0
+    position_alert_ts:  datetime = _now0
     daily_report_sent_slot: str  = ""
     _dd_halt_alerted:   bool     = False
 
@@ -549,7 +570,7 @@ def main() -> None:
                 except Exception:
                     pass
 
-            # ── 30-min rolling alert ──────────────────────────────────────────
+            # ── 30-min rolling PnL alert (main alerter) ──────────────────────
             elapsed_min = (now - periodic_alert_ts).total_seconds() / 60.0
             if alerter and elapsed_min >= _p.periodic_alert_min and periodic_alert_eq > 0:
                 try:
@@ -572,6 +593,43 @@ def main() -> None:
                     periodic_alert_eq = curr_eq
                 except Exception as exc:
                     LOGGER.warning("Periodic alert failed: %s", exc)
+
+            # ── 30-min open position snapshot (position_alerter) ──────────────
+            pos_elapsed_min = (now - position_alert_ts).total_seconds() / 60.0
+            if position_alerter and pos_elapsed_min >= _p.periodic_alert_min:
+                try:
+                    open_pos = {s: st for s, st in states.items() if st.net_pos_qty != 0.0}
+                    if open_pos:
+                        lines = ["📊 <b>experiment_v7</b> — Open Positions\n"]
+                        total_upnl = 0.0
+                        for sym, st in open_pos.items():
+                            sig = store.get(sym)
+                            mid = sig.mid if sig else st.entry_price
+                            is_long = st.net_pos_qty > 0
+                            qty     = abs(st.net_pos_qty)
+                            upnl    = (mid - st.entry_price) * qty if is_long \
+                                      else (st.entry_price - mid) * qty
+                            upnl_pct = ((mid - st.entry_price) / st.entry_price * 100) if is_long \
+                                       else ((st.entry_price - mid) / st.entry_price * 100)
+                            age_min = int((now - st.position_open_ts).total_seconds() / 60) \
+                                      if st.position_open_ts else 0
+                            side_str = "Long 🟢" if is_long else "Short 🔴"
+                            icon = "✅" if upnl >= 0 else "❌"
+                            lines.append(
+                                f"{icon} <b>{sym}</b> {side_str}\n"
+                                f"   Entry: {st.entry_price:.4f}  Now: {mid:.4f}\n"
+                                f"   PnL: <b>{upnl:+.4f} USDT</b> ({upnl_pct:+.2f}%)  age: {age_min}m"
+                            )
+                            total_upnl += upnl
+                        total_icon = "✅" if total_upnl >= 0 else "❌"
+                        lines.append(f"\n{total_icon} Total open PnL: <b>{total_upnl:+.4f} USDT</b>")
+                    else:
+                        lines = ["📊 <b>experiment_v7</b> — No open positions"]
+                    position_alerter.send("\n".join(lines))
+                    LOGGER.info("Position snapshot sent | %d open", len(open_pos))
+                    position_alert_ts = now
+                except Exception as exc:
+                    LOGGER.warning("Position snapshot alert failed: %s", exc)
 
             # ── daily 10 PM HKT report ────────────────────────────────────────
             now_hkt  = now.astimezone(HKT)
@@ -619,27 +677,74 @@ def main() -> None:
                 time.sleep(_p.scan_interval_sec)
                 continue
 
-            # Detect closed positions → update loss streak
+            # Detect closed positions → real PnL + loss streak
             for sym, old in prev_positions.items():
                 if sym not in live_positions:
-                    old_entry  = float(old.get("avgPrice") or 0)
-                    mark_price = 0.0
-                    try:
-                        resp = session.get_tickers(category="linear", symbol=sym)
-                        mark_price = float(resp["result"]["list"][0].get("markPrice") or 0)
-                    except Exception:
-                        pass
-                    old_side = old.get("side", "Buy")
-                    won = (mark_price > old_entry) if old_side == "Buy" \
-                          else (mark_price < old_entry)
+                    old_entry = float(old.get("avgPrice") or 0)
+                    old_side  = old.get("side", "Buy")
+                    st        = states[sym]
+
+                    # Fetch actual realized PnL from Bybit
+                    cpnl_record = _fetch_closed_pnl(session, sym)
+                    if cpnl_record:
+                        realized_pnl  = float(cpnl_record.get("closedPnl")    or 0)
+                        exit_price    = float(cpnl_record.get("avgExitPrice")  or 0)
+                        close_qty     = float(cpnl_record.get("qty")           or 0)
+                        close_fee     = abs(float(cpnl_record.get("closeFee")  or 0)) \
+                                      + abs(float(cpnl_record.get("openFee")   or 0))
+                        won = realized_pnl > 0
+                        if exit_price > 0 and old_entry > 0:
+                            pnl_pct = ((exit_price - old_entry) / old_entry * 100) if old_side == "Buy" \
+                                      else ((old_entry - exit_price) / old_entry * 100)
+                        else:
+                            pnl_pct = (realized_pnl / (old_entry * close_qty) * 100) if old_entry * close_qty > 0 else 0.0
+                    else:
+                        # Fallback: estimate from current mark price
+                        mark_price = 0.0
+                        try:
+                            resp = session.get_tickers(category="linear", symbol=sym)
+                            mark_price = float(resp["result"]["list"][0].get("markPrice") or 0)
+                        except Exception:
+                            pass
+                        realized_pnl = 0.0
+                        exit_price   = mark_price
+                        close_fee    = 0.0
+                        won = (mark_price > old_entry) if old_side == "Buy" \
+                              else (mark_price < old_entry)
+                        pnl_pct = ((exit_price - old_entry) / old_entry * 100) if old_side == "Buy" \
+                                  else ((old_entry - exit_price) / old_entry * 100)
+
+                    age_min = int((now - st.position_open_ts).total_seconds() / 60) \
+                              if st.position_open_ts else 0
+
+                    icon   = "✅" if won else "❌"
+                    result = "PROFIT" if won else "LOSS"
+                    LOGGER.info(
+                        "%s: position closed at %s  entry=%.4f exit=%.4f "
+                        "pnl=%+.4f USDT (%+.2f%%)  age=%dm  streak=%d",
+                        sym, result, old_entry, exit_price,
+                        realized_pnl, pnl_pct, age_min,
+                        loss_streak if not won else 0,
+                    )
+
+                    # Send close notification to position_alerter
+                    if position_alerter:
+                        try:
+                            side_str = "Long 🟢" if old_side == "Buy" else "Short 🔴"
+                            fee_str  = f"{close_fee:.4f} USDT" if close_fee > 0 else "n/a"
+                            position_alerter.send(
+                                f"{icon} <b>{sym}</b> {side_str} CLOSED\n"
+                                f"Entry: <b>{old_entry:.4f}</b>  →  Exit: <b>{exit_price:.4f}</b>\n"
+                                f"PnL: <b>{realized_pnl:+.4f} USDT</b> ({pnl_pct:+.2f}%)\n"
+                                f"Hold: {age_min}m  |  Fees: {fee_str}"
+                            )
+                        except Exception:
+                            pass
+
                     if won:
                         loss_streak = 0
-                        LOGGER.info("%s: position closed at PROFIT (mark=%.4f entry=%.4f)",
-                                    sym, mark_price, old_entry)
                     else:
                         loss_streak += 1
-                        LOGGER.info("%s: position closed at LOSS  (mark=%.4f entry=%.4f) "
-                                    "streak=%d", sym, mark_price, old_entry, loss_streak)
                         if loss_streak >= _p.max_loss_streak and not _p.dry_run:
                             loss_streak_pause_until = now + timedelta(
                                 minutes=_p.loss_streak_pause_min)
