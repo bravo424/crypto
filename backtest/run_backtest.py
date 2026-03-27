@@ -18,7 +18,8 @@ Directional strategy (experiment_v7)
 Options
 -------
   --symbol   SYMBOL         single symbol to backtest (e.g. BTCUSDT)
-  --all                     run all active symbols from market_data/symbol_list.csv
+  --all                     run all active symbols from the strategy symbol_list.csv
+                            (v6 list for MM, v7 list for --directional)
   --days     N              days of history (default 90)
   --capital  USDT           initial capital (default 500)
   --no-fetch                skip API fetch, use only cached data
@@ -56,7 +57,8 @@ from backtest.directional_strategy import (
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-_SYMBOL_LIST_CSV  = Path("market_data/symbol_list.csv")
+_V6_SYMBOL_LIST   = Path("strategies/experiment_v6/symbol_list.csv")
+_V7_SYMBOL_LIST   = Path("strategies/experiment_v7/symbol_list.csv")
 _V6_PARAMS_FILE   = Path("strategies/experiment_v6/params.json")
 _V7_PARAMS_FILE   = Path("strategies/experiment_v7/params.json")
 _GRID_SPREADS     = [0.0002, 0.0003, 0.0004, 0.0005, 0.0006, 0.0008, 0.001]
@@ -189,11 +191,11 @@ def _run_dir_grid(symbol: str, days: int, tp: float, sl: float, capital: float,
     return results
 
 
-def _load_active_symbols() -> list[str]:
-    if not _SYMBOL_LIST_CSV.exists():
+def _load_active_symbols(csv_path: Path) -> list[str]:
+    if not csv_path.exists():
         return []
     syms: list[str] = []
-    with _SYMBOL_LIST_CSV.open(encoding="utf-8") as fh:
+    with csv_path.open(encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             if row.get("active", "true").strip().lower() in ("true", "1", "yes"):
                 syms.append(row["symbol"].strip())
@@ -280,7 +282,8 @@ def main() -> None:
     if args.update_v7_params and not (args.grid and args.directional):
         parser.error("--update-v7-params requires --directional --grid")
 
-    symbols = _load_active_symbols() if args.all else [args.symbol]
+    sym_csv = _V7_SYMBOL_LIST if args.directional else _V6_SYMBOL_LIST
+    symbols = _load_active_symbols(sym_csv) if args.all else [args.symbol]
 
     # ── Directional path ──────────────────────────────────────────────────────
     if args.directional:

@@ -39,5 +39,8 @@
   "daily_report_hkt_hour":  22,
 
   "ws_startup_wait_sec":    8,
-  "dry_run":                false
+  "dry_run":                false,
+
+  "_comment_symbols": "Bybit linear symbols for WebSocket + scanning. Path relative to this folder unless absolute.",
+  "symbols_csv":            "symbol_list.csv"
 }

@@ -310,7 +310,7 @@ def main() -> None:
         # Start the WebSocket feed so SignalStore is populated before the first
         # scan cycle.  start_market_data() is idempotent — safe to call even if
         # experiment_v6 is also running in a separate process.
-        _md.start_market_data()  # type: ignore[union-attr]
+        _md.start_market_data(csv_path=HERE / "symbol_list.csv")  # type: ignore[union-attr]
         core.LOGGER.info("v5: market_data WebSocket feed started")
         core._extra_signal_gate = md_signal_gate  # type: ignore[attr-defined]
         core.LOGGER.info("v5: market_data signal gate enabled")

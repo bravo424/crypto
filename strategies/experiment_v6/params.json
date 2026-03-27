@@ -37,7 +37,8 @@
   "periodic_alert_min":            30,
   "daily_report_hkt_hour":         22,
 
-  "symbols_csv":                   "market_data/symbol_list.csv",
+  "_comment_symbols": "Bybit linear symbols for WS + MM. File next to this folder; override path via symbols_csv.",
+  "symbols_csv":                   "symbol_list.csv",
   "ws_startup_wait_sec":           5,
 
   "dry_run": false,

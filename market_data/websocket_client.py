@@ -1,7 +1,7 @@
 """Bybit WebSocket v5 public linear feed manager.
 
 Subscribes to `orderbook.50.<symbol>` and `publicTrade.<symbol>` for each
-active symbol in symbol_list.csv.
+active symbols in the CSV passed to BybitWSClient (default: package ``symbol_list.csv``).
 
 VIP 0 limits
   - Max 10 WebSocket connections per IP.

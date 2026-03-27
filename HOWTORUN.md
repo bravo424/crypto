@@ -120,6 +120,7 @@ run-strat experiment_v4 --exchange bithumb --close-all
 #   Key config: strategies/experiment_v5/params.json
 #               strategies/experiment_v5/symbols_bybit.json
 #               strategies/experiment_v5/symbols_bithumb.json
+#               strategies/experiment_v5/symbol_list.csv  (Bybit WS for MD gate)
 #
 #   v5 supports runtime overrides without editing params.json:
 #   --set key=value
@@ -176,7 +177,7 @@ run-strat experiment_v5 --exchange bithumb --clear-pause
 #   Requires market_data WebSocket feed (starts automatically).
 #
 #   Key config: strategies/experiment_v6/params.json
-#               market_data/symbol_list.csv
+#               strategies/experiment_v6/symbol_list.csv  (symbols_csv in JSON)
 #
 #   Fee viability (VIP 0): half_spread must be > 0.02% (break-even).
 #   Default half_spread = 0.04% (full spread 0.08% — net ~0.04% per round trip).
@@ -241,7 +242,7 @@ run-strat experiment_v6 --debug --dry-run
 #   Exit: native TP + SL via set_trading_stop on exchange immediately after fill.
 #
 #   Key config: strategies/experiment_v7/params.json
-#               market_data/symbol_list.csv
+#               strategies/experiment_v7/symbol_list.csv  (symbols_csv in JSON)
 #
 #   Leverage: 5× for BTCUSDT/ETHUSDT, 3× for all others. Cross margin.
 #   Position size: equity × max_risk_pct / sl_pct, capped at max_notional_usd.
@@ -269,7 +270,7 @@ run-strat experiment_v7 --debug --dry-run
 # Single symbol, default params (90 days)
 run-backtest --symbol BTCUSDT --days 90
 
-# All symbols in market_data/symbol_list.csv
+# All symbols in strategies/experiment_v6/symbol_list.csv (v7 list if --directional)
 run-backtest --all --days 90
 
 # Grid search over spreads to find the most profitable MM configuration

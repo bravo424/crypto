@@ -96,6 +96,7 @@ class Params:
     # ── misc ──────────────────────────────────────────────────────────────────
     ws_startup_wait_sec:    float = 8.0
     dry_run:                bool  = False
+    symbols_csv:            str   = "symbol_list.csv"   # relative to this package dir; WS subscriptions
 
 
 _p = Params()
@@ -460,7 +461,10 @@ def main() -> None:
     )
 
     # ── start market data ─────────────────────────────────────────────────────
-    md.start_market_data()
+    _sym_csv = Path(_p.symbols_csv)
+    if not _sym_csv.is_absolute():
+        _sym_csv = HERE / _sym_csv
+    md.start_market_data(csv_path=_sym_csv)
     LOGGER.info("Waiting %.0fs for WebSocket to populate …", _p.ws_startup_wait_sec)
     time.sleep(_p.ws_startup_wait_sec)
 
@@ -468,7 +472,7 @@ def main() -> None:
     symbols = store.symbols()
     if not symbols:
         from market_data.websocket_client import _load_symbols
-        symbols = _load_symbols()
+        symbols = _load_symbols(_sym_csv)
 
     LOGGER.info(
         "experiment_v7 started | %d symbols | dry_run=%s | tp=%.1f%% sl=%.1f%%",

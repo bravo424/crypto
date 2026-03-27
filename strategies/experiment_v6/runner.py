@@ -4,7 +4,8 @@ experiment_v6 — Signal-enhanced market making on Bybit USDT-perp.
 Design
 ------
   1. WebSocket feed (market_data package) streams live order books + trades
-     for every symbol in market_data/symbol_list.csv.
+     for every active symbol in ``symbol_list.csv`` next to this strategy
+     (path override: ``symbols_csv`` in params.json).
   2. Every `quote_refresh_sec` the runner reads the SignalStore and:
        a. Cancels all existing quotes for a symbol.
        b. If ob_imbalance is too extreme (|imbalance| > threshold) → skip
@@ -96,6 +97,7 @@ class Params:
     daily_report_hkt_hour:        int   = 22   # 10 PM HKT daily summary
     ws_startup_wait_sec:          float = 5.0
     dry_run:                      bool  = False
+    symbols_csv:                  str   = "symbol_list.csv"   # relative to this package dir
 
     def __post_init__(self) -> None:
         if self.symbol_leverage is None:
@@ -135,6 +137,7 @@ def load_params() -> None:
     _p.daily_report_hkt_hour         = int(d.get("daily_report_hkt_hour",            _p.daily_report_hkt_hour))
     _p.ws_startup_wait_sec           = float(d.get("ws_startup_wait_sec",            _p.ws_startup_wait_sec))
     _p.dry_run                       = bool(d.get("dry_run",                         _p.dry_run))
+    _p.symbols_csv                   = str(d.get("symbols_csv",                    _p.symbols_csv))
 
     # Enforce minimum viable spread (break-even = 2 × maker fee)
     min_half = MAKER_FEE
@@ -611,16 +614,18 @@ def main() -> None:
     )
 
     # ── start market data feed ────────────────────────────────────────────────
-    md.start_market_data()
+    _sym_csv = Path(_p.symbols_csv)
+    if not _sym_csv.is_absolute():
+        _sym_csv = HERE / _sym_csv
+    md.start_market_data(csv_path=_sym_csv)
     LOGGER.info("Waiting %.0fs for WS to populate …", _p.ws_startup_wait_sec)
     time.sleep(_p.ws_startup_wait_sec)
 
     store       = md.get_signal_store()
     symbols     = store.symbols()
     if not symbols:
-        # Fall back to CSV if WS not yet populated
         from market_data.websocket_client import _load_symbols
-        symbols = _load_symbols()
+        symbols = _load_symbols(_sym_csv)
     LOGGER.info("experiment_v6 started | %d symbols | dry_run=%s",
                 len(symbols), _p.dry_run)
 
