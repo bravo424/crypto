@@ -16,6 +16,8 @@ Usage
 
   # Graceful shutdown
   stop_market_data()
+
+  # Long-running archive only (separate process): see ``run-market-data`` CLI.
 """
 from __future__ import annotations
 

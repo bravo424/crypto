@@ -22,6 +22,7 @@ listing-bot   = "upbit_bybit_bot.main:main"
 strategy-hub  = "scripts.strategy_hub:main"
 run-strat     = "scripts.run_strategy:main"
 run-backtest  = "backtest.run_backtest:main"
+run-market-data = "market_data.service:main"
 
 [tool.setuptools]
 package-dir = {"" = "src", "scripts" = "scripts", "strategies" = "strategies", "market_data" = "market_data", "backtest" = "backtest", "utils" = "utils"}
@@ -35,6 +36,7 @@ packages = [
   "strategies.experiment_v5",
   "strategies.experiment_v6",
   "strategies.experiment_v7",
+  "strategies.orca_clmm_rust",
   "market_data",
   "backtest",
   "utils",

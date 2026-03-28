@@ -265,10 +265,26 @@ run-strat experiment_v7 --debug --dry-run
 
 #   Historical books/trades: Bybit public API does not offer ~1 year of L2 or
 #   tick trades for download.  To analyse microstructure you either purchase
-#   vendor data or record forward: set md_record_dir in params.json (e.g.
-#   data/md_archive_v7) or MARKET_DATA_RECORD_DIR in .env — every trade is
-#   appended as JSONL; top-of-book snapshots are throttled (see
-#   md_book_snapshot_interval_sec).  data/ is gitignored.
+#   vendor data or record forward (JSONL).  data/ is gitignored.
+
+# ── run-market-data — standalone recorder (separate from run-strat) ─────────
+#
+#   SignalStore lives **inside** each strategy process, so ``run-strat`` still
+#   opens its own WebSocket for live trading.  This daemon is only so **archive
+#   files** keep growing when a strategy crashes or restarts.
+#
+#   Run 24/7 in another terminal (or Windows Service / systemd):
+#
+#     run-market-data --csv-path strategies/experiment_v7/symbol_list.csv \\
+#         --record-dir data/md_archive --book-interval 2
+#
+#   Or set MARKET_DATA_RECORD_DIR=data/md_archive in .env and omit --record-dir.
+#
+#   Equivalent:  python -m market_data.service --csv-path strategies/experiment_v7/symbol_list.csv
+#
+#   In experiment_v7 params.json set ``md_record_dir`` to "" so you do not write
+#   the same JSONL twice from the bot (optional; double writes are harmless but
+#   waste disk).  Strategies still need their WS for entries.
 
 # ── backtest ──────────────────────────────────────────────────────────────────
 #
