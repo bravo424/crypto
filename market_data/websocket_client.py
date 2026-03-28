@@ -23,6 +23,7 @@ from typing import Callable
 
 import websocket  # websocket-client library
 
+from market_data.archive_recorder import ArchiveRecorder
 from market_data.book_manager import BookManager
 from market_data.signal_engine import SignalEngine
 from market_data.signal_store import _global_store
@@ -54,12 +55,14 @@ class _SingleConnection(threading.Thread):
 
     def __init__(self, topics: list[str], book: BookManager,
                  flow: TradeFlow, engine: SignalEngine,
-                 name: str = "bybit-ws") -> None:
+                 name: str = "bybit-ws",
+                 archive: ArchiveRecorder | None = None) -> None:
         super().__init__(name=name, daemon=True)
         self._topics  = topics
         self._book    = book
         self._flow    = flow
         self._engine  = engine
+        self._archive = archive
         self._ws: websocket.WebSocketApp | None = None
         self._stop_event  = threading.Event()
         self._connected   = threading.Event()
@@ -140,6 +143,9 @@ class _SingleConnection(threading.Thread):
             else:
                 self._book.on_delta(symbol, bids, asks)
             self._engine.refresh(symbol)
+            if self._archive is not None:
+                tb, ta = self._book.top_depth(symbol, 5)
+                self._archive.log_book_throttled(symbol, tb, ta)
 
         elif topic.startswith("publicTrade."):
             symbol = topic.split(".")[-1]
@@ -150,6 +156,8 @@ class _SingleConnection(threading.Thread):
                 ts_ms = int(trade.get("T") or trade.get("ts", 0))
                 ts    = ts_ms / 1000.0 if ts_ms else time.time()
                 self._flow.on_trade(symbol, side, qty, price, ts)
+                if self._archive is not None:
+                    self._archive.log_trade(symbol, side, qty, price, ts)
             self._engine.refresh(symbol)
 
     def _on_error(self, ws: websocket.WebSocketApp, err: Exception) -> None:
@@ -165,13 +173,20 @@ class BybitWSClient:
     """Manages multiple _SingleConnection threads — one per batch of topics."""
 
     def __init__(self, symbols: list[str] | None = None,
-                 csv_path: Path | None = None) -> None:
+                 csv_path: Path | None = None,
+                 record_dir: Path | None = None,
+                 book_snapshot_interval_sec: float = 2.0) -> None:
         self._symbols = symbols or _load_symbols(csv_path)
         self._book   = BookManager(depth=5)
         self._flow   = TradeFlow()
         self._engine = SignalEngine(self._book, self._flow, _global_store)
         self._conns: list[_SingleConnection] = []
         self._running = False
+        self._archive: ArchiveRecorder | None = None
+        if record_dir is not None:
+            self._archive = ArchiveRecorder(
+                record_dir, book_interval_sec=book_snapshot_interval_sec)
+            LOGGER.info("Market data archive enabled → %s", record_dir.resolve())
 
     def start(self) -> None:
         if self._running:
@@ -196,6 +211,7 @@ class BybitWSClient:
                 topics=batch,
                 book=self._book, flow=self._flow, engine=self._engine,
                 name=f"bybit-ws-{idx}",
+                archive=self._archive,
             )
             conn.start()
             self._conns.append(conn)

@@ -263,6 +263,13 @@ run-strat experiment_v7 --once --dry-run
 # Debug logging (shows every signal value, ob_imbalance, trade pressure)
 run-strat experiment_v7 --debug --dry-run
 
+#   Historical books/trades: Bybit public API does not offer ~1 year of L2 or
+#   tick trades for download.  To analyse microstructure you either purchase
+#   vendor data or record forward: set md_record_dir in params.json (e.g.
+#   data/md_archive_v7) or MARKET_DATA_RECORD_DIR in .env — every trade is
+#   appended as JSONL; top-of-book snapshots are throttled (see
+#   md_book_snapshot_interval_sec).  data/ is gitignored.
+
 # ── backtest ──────────────────────────────────────────────────────────────────
 #
 #   Downloads 3 months of 1-min OHLCV from Bybit and simulates strategies.

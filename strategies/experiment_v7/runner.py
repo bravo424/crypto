@@ -104,6 +104,9 @@ class Params:
     # ── optional HTF kline gate (REST) — not 1m; v7 micro signal is still WS book + flow ──
     htf_kline_minutes:      int   = 0     # 0 = off; 3, 5, or 15 = Bybit kline interval
     htf_cache_sec:          float = 45.0  # min seconds between kline fetches per symbol
+    # ── forward archive (no historical 1y books from API — record live) ─────
+    md_record_dir:                    str   = ""   # e.g. data/md_archive_v7
+    md_book_snapshot_interval_sec:    float = 2.0  # min seconds between L2 snapshots
 
 
 _p = Params()
@@ -142,6 +145,9 @@ def load_params() -> None:
     _p.symbols_csv            = str(d.get("symbols_csv",              _p.symbols_csv))
     _p.htf_kline_minutes      = int(d.get("htf_kline_minutes",        _p.htf_kline_minutes))
     _p.htf_cache_sec          = float(d.get("htf_cache_sec",            _p.htf_cache_sec))
+    _p.md_record_dir          = str(d.get("md_record_dir",              _p.md_record_dir))
+    _p.md_book_snapshot_interval_sec = float(
+        d.get("md_book_snapshot_interval_sec", _p.md_book_snapshot_interval_sec))
 
 
 # ── per-symbol state ──────────────────────────────────────────────────────────
@@ -549,7 +555,17 @@ def main() -> None:
     _sym_csv = Path(_p.symbols_csv)
     if not _sym_csv.is_absolute():
         _sym_csv = HERE / _sym_csv
-    md.start_market_data(csv_path=_sym_csv)
+    _rec: Path | None = None
+    if (_p.md_record_dir or "").strip():
+        _rec = Path(_p.md_record_dir.strip())
+        if not _rec.is_absolute():
+            _rec = Path.cwd() / _rec
+        LOGGER.info("Recording market data archive → %s", _rec)
+    md.start_market_data(
+        csv_path=_sym_csv,
+        record_dir=_rec,
+        book_snapshot_interval_sec=_p.md_book_snapshot_interval_sec,
+    )
     LOGGER.info("Waiting %.0fs for WebSocket to populate …", _p.ws_startup_wait_sec)
     time.sleep(_p.ws_startup_wait_sec)
 

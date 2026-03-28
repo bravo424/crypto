@@ -46,5 +46,9 @@
 
   "_comment_htf": "v7 does NOT use 1m candles for entries (micro signal = WS book + 5m rolling trade flow). htf_kline_minutes enables an extra REST gate: last CLOSED kline close vs prior must agree with entry side. 0 = off. Try 5 or 3 for fewer whipsaws.",
   "htf_kline_minutes":      5,
-  "htf_cache_sec":          45
+  "htf_cache_sec":          45,
+
+  "_comment_md_archive": "Bybit does not provide ~1y of historical L2/trades on the public API. Set md_record_dir to build your own dataset (JSONL) while the bot runs. Or use env MARKET_DATA_RECORD_DIR. Watch disk on busy symbols.",
+  "md_record_dir":                    "",
+  "md_book_snapshot_interval_sec":    2.0
 }

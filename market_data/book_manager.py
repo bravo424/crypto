@@ -79,6 +79,14 @@ class BookManager:
             return 0.0
         return (ba - bb) / ((ba + bb) / 2.0)
 
+    def top_depth(self, symbol: str, n: int = 5) -> tuple[list[list[float]], list[list[float]]]:
+        """Return copies of top-N bid/ask levels ``[[price, qty], ...]`` for archiving."""
+        with self._lock:
+            book = self._books[symbol]
+            bids = [list(x) for x in book["b"][:n]]
+            asks = [list(x) for x in book["a"][:n]]
+        return bids, asks
+
     # ── internal helpers ──────────────────────────────────────────────────────
 
     @staticmethod
