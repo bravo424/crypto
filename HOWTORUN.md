@@ -237,10 +237,13 @@ run-strat experiment_v6 --debug --dry-run
 #   0.075% per trade but targets 0.8% TP → net +0.725% per win.
 #   Break-even win rate ≈ 41%.
 #
-#   Entry: ob_imbalance AND trade_pressure_5m both exceed thresholds.
-#   (Micro signal is WebSocket book + trade flow — not 1m OHLC candles.)
-#   Optional: htf_kline_minutes (3 / 5 / 15 …) — REST gate so the last *closed*
-#   kline’s close vs the prior candle agrees with the side (fewer whipsaws).
+#   entry_mode (params.json):  microstructure | candles | both
+#     • microstructure — ob_imbalance AND trade_pressure_5m (WS book + 5m trade flow).
+#     • candles — direction from REST klines only: last *closed* bar vs prior
+#       (candle_interval_minutes, default 1).  candle_require_bull_body filters
+#       weak bars.  WebSocket still supplies mid for sizing.
+#     • both — same side required from micro + candles or skip.
+#   Optional: htf_kline_minutes (3 / 5 / 15 …) — extra REST gate on top.
 #   Set htf_kline_minutes to 0 to disable.  htf_cache_sec avoids spamming kline API.
 #   Execution: market order (taker, guaranteed fill).
 #   Exit: native TP + SL via set_trading_stop on exchange immediately after fill.
@@ -284,7 +287,8 @@ run-strat experiment_v7 --debug --dry-run
 #
 #   In experiment_v7 params.json set ``md_record_dir`` to "" so you do not write
 #   the same JSONL twice from the bot (optional; double writes are harmless but
-#   waste disk).  Strategies still need their WS for entries.
+#   waste disk).  Strategies still need their WS for live mid / micro signals
+#   (candle-only entry_mode still uses WS for price).
 
 # ── backtest ──────────────────────────────────────────────────────────────────
 #

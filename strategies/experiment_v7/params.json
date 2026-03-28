@@ -1,7 +1,13 @@
 {
   "_comment": "experiment_v7 — Signal-Driven Directional Scalp on Bybit USDT-perp.",
 
-  "_comment_signal": "Entry: BOTH ob_imbalance AND trade_pressure_5m must strongly agree.",
+  "_comment_entry_mode": "microstructure = WS book+trade flow only. candles = REST klines only (last closed bar vs prior). both = require same side from both. Still need WS for mid price sizing.",
+  "entry_mode":                 "microstructure",
+  "candle_interval_minutes":    1,
+  "candle_require_bull_body":   true,
+  "candle_cache_sec":           15.0,
+
+  "_comment_signal": "When entry_mode is microstructure or both: ob_imbalance AND trade_pressure_5m must agree.",
   "_signal_rationale": "Thresholds raised from 0.25/0.15 to 0.55/0.40 to filter noise. Fewer entries but much higher hit rate. require_trend_bias=true adds a third confirmation layer.",
   "ob_imbalance_thresh": 0.55,
   "pressure_thresh":     0.40,
@@ -44,7 +50,7 @@
   "_comment_symbols": "Bybit linear symbols for WebSocket + scanning. Path relative to this folder unless absolute.",
   "symbols_csv":            "symbol_list.csv",
 
-  "_comment_htf": "v7 does NOT use 1m candles for entries (micro signal = WS book + 5m rolling trade flow). htf_kline_minutes enables an extra REST gate: last CLOSED kline close vs prior must agree with entry side. 0 = off. Try 5 or 3 for fewer whipsaws.",
+  "_comment_htf": "Optional extra REST gate on top of entry_mode: last CLOSED kline close vs prior must agree with entry side. 0 = off. For pure candle entries you can set 0 to avoid double-filtering; or keep 5m for alignment with higher TF.",
   "htf_kline_minutes":      5,
   "htf_cache_sec":          45,
 

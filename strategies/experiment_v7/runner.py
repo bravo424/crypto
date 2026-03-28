@@ -101,7 +101,12 @@ class Params:
     ws_startup_wait_sec:    float = 8.0
     dry_run:                bool  = False
     symbols_csv:            str   = "symbol_list.csv"   # relative to this package dir; WS subscriptions
-    # ── optional HTF kline gate (REST) — not 1m; v7 micro signal is still WS book + flow ──
+    # ── entry source: microstructure (WS) vs REST candles vs both must agree ──
+    entry_mode:                   str   = "microstructure"  # microstructure | candles | both
+    candle_interval_minutes:      int   = 1                 # Bybit kline interval (1, 3, 5, …)
+    candle_require_bull_body:     bool  = True              # Buy needs close>open on last closed bar
+    candle_cache_sec:             float = 15.0              # REST kline cache per symbol
+    # ── optional HTF kline gate (REST) on top of chosen entry_mode ───────────
     htf_kline_minutes:      int   = 0     # 0 = off; 3, 5, or 15 = Bybit kline interval
     htf_cache_sec:          float = 45.0  # min seconds between kline fetches per symbol
     # ── forward archive (no historical 1y books from API — record live) ─────
@@ -114,6 +119,9 @@ _p.symbol_leverage = {}
 
 # HTF kline cache: symbol -> (monotonic_ts, "Buy"|"Sell"|None)
 _htf_cache: dict[str, tuple[float, str | None]] = {}
+
+# Candle-entry cache: symbol -> (monotonic_ts, "Buy"|"Sell"|None)
+_candle_entry_cache: dict[str, tuple[float, str | None]] = {}
 
 
 def load_params() -> None:
@@ -143,11 +151,19 @@ def load_params() -> None:
     _p.ws_startup_wait_sec    = float(d.get("ws_startup_wait_sec",    _p.ws_startup_wait_sec))
     _p.dry_run                = bool(d.get("dry_run",                 _p.dry_run))
     _p.symbols_csv            = str(d.get("symbols_csv",              _p.symbols_csv))
+    _p.entry_mode             = str(d.get("entry_mode",                 _p.entry_mode)).strip().lower()
+    _p.candle_interval_minutes = int(d.get("candle_interval_minutes",   _p.candle_interval_minutes))
+    _p.candle_require_bull_body = bool(d.get("candle_require_bull_body", _p.candle_require_bull_body))
+    _p.candle_cache_sec       = float(d.get("candle_cache_sec",           _p.candle_cache_sec))
     _p.htf_kline_minutes      = int(d.get("htf_kline_minutes",        _p.htf_kline_minutes))
     _p.htf_cache_sec          = float(d.get("htf_cache_sec",            _p.htf_cache_sec))
     _p.md_record_dir          = str(d.get("md_record_dir",              _p.md_record_dir))
     _p.md_book_snapshot_interval_sec = float(
         d.get("md_book_snapshot_interval_sec", _p.md_book_snapshot_interval_sec))
+
+    if _p.entry_mode not in ("microstructure", "candles", "both"):
+        LOGGER.warning("entry_mode invalid (%r) — using microstructure", _p.entry_mode)
+        _p.entry_mode = "microstructure"
 
 
 # ── per-symbol state ──────────────────────────────────────────────────────────
@@ -395,6 +411,97 @@ def _htf_gate_allows(session: HTTP, symbol: str, side: str, mono_t: float) -> bo
     return ok
 
 
+def _parse_kline_open_close(row: object) -> tuple[float, float]:
+    if isinstance(row, dict):
+        o = float(row.get("open") or row.get("o") or 0)
+        c = float(row.get("close") or row.get("c") or 0)
+        return o, c
+    if isinstance(row, (list, tuple)) and len(row) >= 5:
+        return float(row[1]), float(row[4])
+    return 0.0, 0.0
+
+
+def _candle_interval_ok() -> bool:
+    return _p.candle_interval_minutes in _BYBIT_KLINE
+
+
+def _candle_entry_side(session: HTTP, symbol: str) -> str | None:
+    """Direction from last two *closed* klines (newest-first list).
+
+    Buy:  last close > prior close; optionally last bar bullish (close > open).
+    Sell: last close < prior close; optionally last bar bearish.
+    """
+    if not _candle_interval_ok():
+        LOGGER.warning(
+            "candle_interval_minutes=%s invalid — use %s",
+            _p.candle_interval_minutes, sorted(_BYBIT_KLINE),
+        )
+        return None
+    iv = str(_p.candle_interval_minutes)
+    try:
+        resp = session.get_kline(
+            category="linear", symbol=symbol, interval=iv, limit=5,
+        )
+        lst = resp.get("result", {}).get("list") or []
+        if len(lst) < 3:
+            return None
+        o1, c1 = _parse_kline_open_close(lst[1])
+        _o2, c2 = _parse_kline_open_close(lst[2])
+        if c1 <= 0 or c2 <= 0:
+            return None
+        if _p.candle_require_bull_body:
+            bull_bar = c1 > o1
+            bear_bar = c1 < o1
+        else:
+            bull_bar = bear_bar = True
+        if c1 > c2 and bull_bar:
+            return "Buy"
+        if c1 < c2 and bear_bar:
+            return "Sell"
+        return None
+    except Exception as exc:
+        LOGGER.debug("%s: candle entry get_kline failed: %s", symbol, exc)
+        return None
+
+
+def _candle_entry_cached(session: HTTP, symbol: str, mono_t: float) -> str | None:
+    global _candle_entry_cache
+    ent = _candle_entry_cache.get(symbol)
+    if ent is not None and (mono_t - ent[0]) < _p.candle_cache_sec:
+        return ent[1]
+    side = _candle_entry_side(session, symbol)
+    _candle_entry_cache[symbol] = (mono_t, side)
+    return side
+
+
+def _resolve_entry_side(session: HTTP, symbol: str, sig: MarketSignal | None,
+                        mono_t: float) -> tuple[str | None, str]:
+    """Returns (side, reason_tag) for logging."""
+    mode = _p.entry_mode
+    side_micro: str | None = None
+    side_candle: str | None = None
+
+    if mode in ("microstructure", "both") and sig is not None:
+        side_micro = _check_entry(sig)
+    if mode in ("candles", "both"):
+        side_candle = _candle_entry_cached(session, symbol, mono_t)
+
+    if mode == "microstructure":
+        return side_micro, "micro"
+    if mode == "candles":
+        return side_candle, "candle"
+    # both
+    if side_micro is None or side_candle is None:
+        return None, "both-partial"
+    if side_micro != side_candle:
+        LOGGER.debug(
+            "%s: entry_mode both — disagree micro=%s candle=%s",
+            symbol, side_micro, side_candle,
+        )
+        return None, "both-mismatch"
+    return side_micro, "both"
+
+
 # ── position management ───────────────────────────────────────────────────────
 
 def _calc_qty(session: HTTP, symbol: str, mid: float, equity: float) -> str:
@@ -576,8 +683,10 @@ def main() -> None:
         symbols = _load_symbols(_sym_csv)
 
     LOGGER.info(
-        "experiment_v7 started | %d symbols | dry_run=%s | tp=%.1f%% sl=%.1f%%",
+        "experiment_v7 started | %d symbols | dry_run=%s | tp=%.1f%% sl=%.1f%% | "
+        "entry_mode=%s candle_iv=%dm",
         len(symbols), _p.dry_run, _p.tp_pct * 100, _p.sl_pct * 100,
+        _p.entry_mode, _p.candle_interval_minutes,
     )
 
     # ── setup leverage & margin per symbol ────────────────────────────────────
@@ -948,14 +1057,22 @@ def main() -> None:
                                          sym, _p.cooldown_sec - elapsed)
                             continue
 
-                    side = _check_entry(sig)
+                    mono = time.monotonic()
+                    side, _entry_tag = _resolve_entry_side(session, sym, sig, mono)
                     if side is None:
-                        LOGGER.debug("%s: no signal (imb=%.3f p5m=%.3f bias=%s)",
-                                     sym, sig.ob_imbalance,
-                                     sig.trade_pressure_5m, sig.trend_bias)
+                        if _p.entry_mode == "microstructure":
+                            LOGGER.debug(
+                                "%s: no signal (imb=%.3f p5m=%.3f bias=%s)",
+                                sym, sig.ob_imbalance,
+                                sig.trade_pressure_5m, sig.trend_bias,
+                            )
+                        elif _p.entry_mode == "candles":
+                            LOGGER.debug("%s: no %dm candle entry", sym, _p.candle_interval_minutes)
+                        else:
+                            LOGGER.debug("%s: no micro+candle agreement", sym)
                         continue
 
-                    if not _htf_gate_allows(session, sym, side, time.monotonic()):
+                    if not _htf_gate_allows(session, sym, side, mono):
                         continue
 
                     # Size the order
@@ -965,9 +1082,8 @@ def main() -> None:
                         continue
 
                     LOGGER.info(
-                        "%s: ENTRY %s  mid=%.4f  qty=%s  "
-                        "imb=%.3f  p5m=%.3f  bias=%s",
-                        sym, side, sig.mid, qty_str,
+                        "%s: ENTRY %s [%s] mid=%.4f qty=%s | imb=%.3f p5m=%.3f bias=%s",
+                        sym, side, _entry_tag, sig.mid, qty_str,
                         sig.ob_imbalance, sig.trade_pressure_5m, sig.trend_bias,
                     )
 
