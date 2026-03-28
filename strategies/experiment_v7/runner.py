@@ -11,10 +11,14 @@ Why not market making (v6)?
 This strategy instead:
   1. Waits for a strong live signal from the market_data WebSocket feed:
        - ob_imbalance AND trade_pressure_5m both agree on direction.
-  2. Enters with a market order (taker, 0.055%) — guarantees fill, no queue.
-  3. Immediately places native exchange TP (limit, 0.02%) + SL (market) via
+     (This is not 1m REST candles; flow is a rolling window over live trades.)
+  2. Optional ``htf_kline_minutes`` (e.g. 3 or 5): REST kline gate — last
+     closed candle must close higher/lower than the prior candle to allow
+     long/short (reduces micro-structure whipsaws).
+  3. Enters with a market order (taker, 0.055%) — guarantees fill, no queue.
+  4. Immediately places native exchange TP (limit, 0.02%) + SL (market) via
      set_trading_stop.
-  4. Polls each cycle for max-hold timeout and emergency backup SL.
+  5. Polls each cycle for max-hold timeout and emergency backup SL.
 
 Fee math per trade
 ------------------
@@ -97,10 +101,16 @@ class Params:
     ws_startup_wait_sec:    float = 8.0
     dry_run:                bool  = False
     symbols_csv:            str   = "symbol_list.csv"   # relative to this package dir; WS subscriptions
+    # ── optional HTF kline gate (REST) — not 1m; v7 micro signal is still WS book + flow ──
+    htf_kline_minutes:      int   = 0     # 0 = off; 3, 5, or 15 = Bybit kline interval
+    htf_cache_sec:          float = 45.0  # min seconds between kline fetches per symbol
 
 
 _p = Params()
 _p.symbol_leverage = {}
+
+# HTF kline cache: symbol -> (monotonic_ts, "Buy"|"Sell"|None)
+_htf_cache: dict[str, tuple[float, str | None]] = {}
 
 
 def load_params() -> None:
@@ -129,6 +139,9 @@ def load_params() -> None:
     _p.daily_report_hkt_hour  = int(d.get("daily_report_hkt_hour",    _p.daily_report_hkt_hour))
     _p.ws_startup_wait_sec    = float(d.get("ws_startup_wait_sec",    _p.ws_startup_wait_sec))
     _p.dry_run                = bool(d.get("dry_run",                 _p.dry_run))
+    _p.symbols_csv            = str(d.get("symbols_csv",              _p.symbols_csv))
+    _p.htf_kline_minutes      = int(d.get("htf_kline_minutes",        _p.htf_kline_minutes))
+    _p.htf_cache_sec          = float(d.get("htf_cache_sec",            _p.htf_cache_sec))
 
 
 # ── per-symbol state ──────────────────────────────────────────────────────────
@@ -302,6 +315,78 @@ def _check_entry(sig: MarketSignal) -> str | None:
         return "Sell"
 
     return None
+
+
+_BYBIT_KLINE = frozenset({1, 3, 5, 15, 30, 60, 120, 240, 360, 720})
+
+
+def _htf_interval_str() -> str | None:
+    m = _p.htf_kline_minutes
+    if m <= 0:
+        return None
+    if m in _BYBIT_KLINE:
+        return str(m)
+    LOGGER.warning("htf_kline_minutes=%s invalid — use %s; using 5", m, sorted(_BYBIT_KLINE))
+    return "5"
+
+
+def _parse_kline_close(row: object) -> float:
+    if isinstance(row, dict):
+        return float(row.get("close") or row.get("c") or 0)
+    if isinstance(row, (list, tuple)) and len(row) >= 5:
+        return float(row[4])
+    return 0.0
+
+
+def _get_htf_momentum_side(session: HTTP, symbol: str) -> str | None:
+    """Momentum from last *closed* kline vs previous (Bybit list is newest-first).
+
+    Returns ``\"Buy\"`` if last closed close > prior close, ``\"Sell\"`` if <,
+    ``None`` if flat, insufficient data, or API error.
+    """
+    iv = _htf_interval_str()
+    if not iv:
+        return None
+    try:
+        resp = session.get_kline(
+            category="linear", symbol=symbol, interval=iv, limit=5,
+        )
+        lst = resp.get("result", {}).get("list") or []
+        if len(lst) < 3:
+            return None
+        # [0] = current (may be forming), [1] = last closed, [2] = prior closed
+        c_last = _parse_kline_close(lst[1])
+        c_prev = _parse_kline_close(lst[2])
+        if c_last <= 0 or c_prev <= 0:
+            return None
+        if c_last > c_prev:
+            return "Buy"
+        if c_last < c_prev:
+            return "Sell"
+        return None
+    except Exception as exc:
+        LOGGER.debug("%s: get_kline HTF failed: %s", symbol, exc)
+        return None
+
+
+def _htf_gate_allows(session: HTTP, symbol: str, side: str, mono_t: float) -> bool:
+    """True if HTF gate is off, or REST kline momentum agrees with ``side``."""
+    if _p.htf_kline_minutes <= 0:
+        return True
+    global _htf_cache
+    ent = _htf_cache.get(symbol)
+    if ent is not None and (mono_t - ent[0]) < _p.htf_cache_sec:
+        htf = ent[1]
+    else:
+        htf = _get_htf_momentum_side(session, symbol)
+        _htf_cache[symbol] = (mono_t, htf)
+    if htf is None:
+        LOGGER.debug("%s: HTF gate — neutral/chop (no entry)", symbol)
+        return False
+    ok = (side == "Buy" and htf == "Buy") or (side == "Sell" and htf == "Sell")
+    if not ok:
+        LOGGER.debug("%s: HTF gate — block %s (HTF momentum=%s)", symbol, side, htf)
+    return ok
 
 
 # ── position management ───────────────────────────────────────────────────────
@@ -852,6 +937,9 @@ def main() -> None:
                         LOGGER.debug("%s: no signal (imb=%.3f p5m=%.3f bias=%s)",
                                      sym, sig.ob_imbalance,
                                      sig.trade_pressure_5m, sig.trend_bias)
+                        continue
+
+                    if not _htf_gate_allows(session, sym, side, time.monotonic()):
                         continue
 
                     # Size the order

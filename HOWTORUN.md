@@ -238,6 +238,10 @@ run-strat experiment_v6 --debug --dry-run
 #   Break-even win rate ≈ 41%.
 #
 #   Entry: ob_imbalance AND trade_pressure_5m both exceed thresholds.
+#   (Micro signal is WebSocket book + trade flow — not 1m OHLC candles.)
+#   Optional: htf_kline_minutes (3 / 5 / 15 …) — REST gate so the last *closed*
+#   kline’s close vs the prior candle agrees with the side (fewer whipsaws).
+#   Set htf_kline_minutes to 0 to disable.  htf_cache_sec avoids spamming kline API.
 #   Execution: market order (taker, guaranteed fill).
 #   Exit: native TP + SL via set_trading_stop on exchange immediately after fill.
 #

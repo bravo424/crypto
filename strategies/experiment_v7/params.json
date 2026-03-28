@@ -20,7 +20,7 @@
 
   "_comment_freq": "Only 1 position at a time until signals prove reliable. cooldown_sec raised to 120s.",
   "cooldown_sec":          120,
-  "max_open_positions":    1,
+  "max_open_positions":    2,
   "scan_interval_sec":     5.0,
 
   "_comment_lev": "5x for BTC/ETH (liquid, tight spread), 3x for others.",
@@ -33,7 +33,7 @@
 
   "max_daily_drawdown_pct": 0.02,
   "max_loss_streak":        3,
-  "loss_streak_pause_min":  30,
+  "loss_streak_pause_min":  2,
 
   "periodic_alert_min":     30,
   "daily_report_hkt_hour":  22,
@@ -42,5 +42,9 @@
   "dry_run":                false,
 
   "_comment_symbols": "Bybit linear symbols for WebSocket + scanning. Path relative to this folder unless absolute.",
-  "symbols_csv":            "symbol_list.csv"
+  "symbols_csv":            "symbol_list.csv",
+
+  "_comment_htf": "v7 does NOT use 1m candles for entries (micro signal = WS book + 5m rolling trade flow). htf_kline_minutes enables an extra REST gate: last CLOSED kline close vs prior must agree with entry side. 0 = off. Try 5 or 3 for fewer whipsaws.",
+  "htf_kline_minutes":      5,
+  "htf_cache_sec":          45
 }
