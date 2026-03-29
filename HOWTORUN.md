@@ -260,6 +260,10 @@ run-strat experiment_v7
 # Dry run (no real orders — prints signal decisions to log)
 run-strat experiment_v7 --dry-run
 
+# Fade the signal: open the opposite side (long<->short). Same thresholds/HTF/TP-SL;
+# only the order side is flipped. Use params.json ``reverse``: true or CLI for one run:
+run-strat experiment_v7 --reverse --dry-run
+
 # One scan cycle only (smoke-test)
 run-strat experiment_v7 --once --dry-run
 

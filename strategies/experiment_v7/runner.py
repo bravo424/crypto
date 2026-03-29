@@ -106,6 +106,7 @@ class Params:
     candle_interval_minutes:      int   = 1                 # Bybit kline interval (1, 3, 5, …)
     candle_require_bull_body:     bool  = True              # Buy needs close>open on last closed bar
     candle_cache_sec:             float = 15.0              # REST kline cache per symbol
+    reverse:                      bool  = False             # if true, flip Buy<->Sell after signal
     # ── optional HTF kline gate (REST) on top of chosen entry_mode ───────────
     htf_kline_minutes:      int   = 0     # 0 = off; 3, 5, or 15 = Bybit kline interval
     htf_cache_sec:          float = 45.0  # min seconds between kline fetches per symbol
@@ -155,6 +156,7 @@ def load_params() -> None:
     _p.candle_interval_minutes = int(d.get("candle_interval_minutes",   _p.candle_interval_minutes))
     _p.candle_require_bull_body = bool(d.get("candle_require_bull_body", _p.candle_require_bull_body))
     _p.candle_cache_sec       = float(d.get("candle_cache_sec",           _p.candle_cache_sec))
+    _p.reverse                = bool(d.get("reverse",                    _p.reverse))
     _p.htf_kline_minutes      = int(d.get("htf_kline_minutes",        _p.htf_kline_minutes))
     _p.htf_cache_sec          = float(d.get("htf_cache_sec",            _p.htf_cache_sec))
     _p.md_record_dir          = str(d.get("md_record_dir",              _p.md_record_dir))
@@ -630,6 +632,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once",    action="store_true",
                         help="Run one scan cycle and exit")
+    parser.add_argument("--reverse", action="store_true",
+                        help="Flip entry side vs signal (Buy<->Sell); overrides params reverse=false")
     args = parser.parse_args()
 
     from utils.logging_setup import setup_logging
@@ -684,9 +688,9 @@ def main() -> None:
 
     LOGGER.info(
         "experiment_v7 started | %d symbols | dry_run=%s | tp=%.1f%% sl=%.1f%% | "
-        "entry_mode=%s candle_iv=%dm",
+        "entry_mode=%s candle_iv=%dm reverse=%s",
         len(symbols), _p.dry_run, _p.tp_pct * 100, _p.sl_pct * 100,
-        _p.entry_mode, _p.candle_interval_minutes,
+        _p.entry_mode, _p.candle_interval_minutes, _p.reverse,
     )
 
     # ── setup leverage & margin per symbol ────────────────────────────────────
@@ -1072,6 +1076,10 @@ def main() -> None:
                             LOGGER.debug("%s: no micro+candle agreement", sym)
                         continue
 
+                    signal_side = side
+                    if _p.reverse:
+                        side = "Sell" if side == "Buy" else "Buy"
+
                     if not _htf_gate_allows(session, sym, side, mono):
                         continue
 
@@ -1081,9 +1089,12 @@ def main() -> None:
                         LOGGER.warning("%s: computed qty=0 — skip (equity=%.2f)", sym, equity)
                         continue
 
+                    rev_note = (
+                        f" (signal={signal_side})" if _p.reverse else ""
+                    )
                     LOGGER.info(
-                        "%s: ENTRY %s [%s] mid=%.4f qty=%s | imb=%.3f p5m=%.3f bias=%s",
-                        sym, side, _entry_tag, sig.mid, qty_str,
+                        "%s: ENTRY %s [%s]%s mid=%.4f qty=%s | imb=%.3f p5m=%.3f bias=%s",
+                        sym, side, _entry_tag, rev_note, sig.mid, qty_str,
                         sig.ob_imbalance, sig.trade_pressure_5m, sig.trend_bias,
                     )
 
