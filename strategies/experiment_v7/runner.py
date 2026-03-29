@@ -154,6 +154,12 @@ def load_params() -> None:
     _p.tp_sl_basis = _basis_raw
     _p.tp_pct                 = float(d.get("tp_pct",                 _p.tp_pct))
     _p.sl_pct                 = float(d.get("sl_pct",                 _p.sl_pct))
+    if _p.tp_pct > 0.15 or _p.sl_pct > 0.15:
+        LOGGER.warning(
+            "tp_pct=%.4f or sl_pct=%.4f is very large — 0.05 means 5%% **price** move; "
+            "0.50 would be ~50%% price (not 5%%). Check params.json for typos.",
+            _p.tp_pct, _p.sl_pct,
+        )
     _p.max_hold_min           = int(d.get("max_hold_min",             _p.max_hold_min))
     _p.max_risk_pct           = float(d.get("max_risk_pct",           _p.max_risk_pct))
     _p.max_notional_usd       = float(d.get("max_notional_usd",       _p.max_notional_usd))
@@ -358,6 +364,29 @@ def _get_positions(session: HTTP) -> dict[str, dict]:
         for item in resp["result"]["list"]
         if float(item.get("size") or 0) > 0
     }
+
+
+def _position_row_for_tp_sl(session: HTTP, symbol: str, net_qty: float) -> dict | None:
+    """Fetch live position row: match ``net_qty`` sign to Bybit ``side``; get real avgPrice + positionIdx."""
+    try:
+        resp = session.get_positions(category="linear", symbol=symbol)
+        rows = resp.get("result", {}).get("list") or []
+        want_buy = net_qty > 0.0
+        for row in rows:
+            sz = float(row.get("size") or 0)
+            if sz <= 0:
+                continue
+            side = row.get("side", "Buy")
+            if want_buy and side == "Buy":
+                return row
+            if not want_buy and side == "Sell":
+                return row
+        for row in rows:
+            if float(row.get("size") or 0) > 0:
+                return row
+    except Exception as exc:
+        LOGGER.debug("%s: get_positions (TP/SL refresh): %s", symbol, exc)
+    return None
 
 
 # ── leverage & margin setup ───────────────────────────────────────────────────
@@ -645,7 +674,15 @@ def _calc_qty(session: HTTP, symbol: str, mid: float, equity: float) -> str:
 
 
 def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState) -> None:
-    if st.entry_price <= 0 or st.net_pos_qty == 0.0:
+    if st.net_pos_qty == 0.0:
+        return
+
+    row = _position_row_for_tp_sl(session, symbol, st.net_pos_qty)
+    entry_px = float(row.get("avgPrice") or 0) if row else st.entry_price
+    pos_idx  = int(row.get("positionIdx") or 0) if row else 0
+    if entry_px <= 0:
+        entry_px = st.entry_price
+    if entry_px <= 0:
         return
 
     is_long = st.net_pos_qty > 0
@@ -653,17 +690,26 @@ def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState) -> None:
     tp_f, sl_f = _tp_sl_as_price_fractions(symbol)
 
     if is_long:
-        tp = _round_price(st.entry_price * (1.0 + tp_f), tick, up=True)
-        sl = _round_price(st.entry_price * (1.0 - sl_f), tick, up=False)
+        tp = _round_price(entry_px * (1.0 + tp_f), tick, up=True)
+        sl = _round_price(entry_px * (1.0 - sl_f), tick, up=False)
+        tp_move_pct = tp_f * 100.0
+        sl_move_pct = sl_f * 100.0
     else:
-        tp = _round_price(st.entry_price * (1.0 - tp_f), tick, up=False)
-        sl = _round_price(st.entry_price * (1.0 + sl_f), tick, up=True)
+        tp = _round_price(entry_px * (1.0 - tp_f), tick, up=False)
+        sl = _round_price(entry_px * (1.0 + sl_f), tick, up=True)
+        tp_move_pct = tp_f * 100.0
+        sl_move_pct = sl_f * 100.0
+
+    lev = max(_get_leverage(symbol), 1)
+    approx_roi_tp = tp_move_pct * lev
+    approx_roi_sl = sl_move_pct * lev
 
     LOGGER.info(
-        "%s: native TP=%s SL=%s  entry=%.4f %s  tp_sl_basis=%s  price_move tp=%.3f%% sl=%.3f%%",
-        symbol, tp, sl, st.entry_price,
+        "%s: native TP=%s SL=%s  entry=%.4f %s  tp_sl_basis=%s  "
+        "mark-price leg: TP ±%.3f%%  SL ±%.3f%%  (~%.0f%% / ~%.0f%% ROI @ %dx for ref.)",
+        symbol, tp, sl, entry_px,
         "Long" if is_long else "Short", _p.tp_sl_basis,
-        tp_f * 100.0, sl_f * 100.0,
+        tp_move_pct, sl_move_pct, approx_roi_tp, approx_roi_sl, lev,
     )
 
     if _p.dry_run:
@@ -671,13 +717,21 @@ def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState) -> None:
         return
 
     try:
+        # Bybit V5: tpslMode is required; omitting it can yield wrong TP/SL binding.
+        # Full + market TP/SL matches entire-position native stops.
         session.set_trading_stop(
-            category="linear", symbol=symbol,
-            takeProfit=tp, stopLoss=sl,
-            tpTriggerBy="MarkPrice", slTriggerBy="MarkPrice",
-            positionIdx=0,
+            category="linear",
+            symbol=symbol,
+            positionIdx=pos_idx,
+            tpslMode="Full",
+            takeProfit=tp,
+            stopLoss=sl,
+            tpTriggerBy="MarkPrice",
+            slTriggerBy="MarkPrice",
+            tpOrderType="Market",
+            slOrderType="Market",
         )
-        LOGGER.info("%s: TP/SL confirmed on exchange", symbol)
+        LOGGER.info("%s: TP/SL confirmed on exchange (tpslMode=Full positionIdx=%s)", symbol, pos_idx)
     except Exception as exc:
         LOGGER.warning("%s: set_trading_stop failed: %s", symbol, exc)
 
