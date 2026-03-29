@@ -1,38 +1,38 @@
 {
-  "_comment": "experiment_v7 — Signal-Driven Directional Scalp on Bybit USDT-perp.",
+  "_comment": "experiment_v7 — Mid-term directional: live book + tick flow AND mid-TF candles; wide TP/SL.",
 
-  "_comment_entry_mode": "microstructure = WS book+trade flow only. candles = REST klines only (last closed bar vs prior). both = require same side from both. Still need WS for mid price sizing.",
-  "entry_mode":                 "microstructure",
-  "candle_interval_minutes":    1,
+  "_comment_entry_mode": "microstructure = WS only. candles = REST klines only. both = micro + candle must agree (recommended for your mix of L2/trades + higher TF).",
+  "entry_mode":                 "both",
+  "candle_interval_minutes":    60,
   "candle_require_bull_body":   true,
-  "candle_cache_sec":           15.0,
+  "candle_cache_sec":           120.0,
 
-  "_comment_reverse": "If true, place the opposite side vs the resolved entry (Buy->Sell, Sell->Buy). HTF gate uses the executed side. CLI --reverse forces true for this run.",
+  "_comment_reverse": "If true, place the opposite side vs the resolved entry. HTF gate uses the executed side. CLI --reverse forces true for this run.",
   "reverse":                    false,
 
-  "_comment_signal": "When entry_mode is microstructure or both: ob_imbalance AND trade_pressure_5m must agree.",
-  "_signal_rationale": "Thresholds raised from 0.25/0.15 to 0.55/0.40 to filter noise. Fewer entries but much higher hit rate. require_trend_bias=true adds a third confirmation layer.",
+  "_comment_signal": "Live WebSocket: ob_imbalance AND trade_pressure_5m (rolling 5m net buy/sell from ticks). Tighten thresholds for fewer trades; loosen slightly if too few fills vs 60m candle.",
+  "_signal_rationale": "Mid-term book+flow timing on top of 60m trend: require strong micro agreement when the hourly bar agrees.",
   "ob_imbalance_thresh": 0.55,
   "pressure_thresh":     0.40,
   "require_trend_bias":  true,
 
-  "_comment_pos": "TP/SL placed on exchange (set_trading_stop) immediately on fill.",
-  "_tp_sl_rationale": "Reduced TP from 0.8% to 0.4% and SL from 0.4% to 0.2%. A 0.4% move within 20 min is realistic for BTCUSDT/ETHUSDT. Net after fees (+0.4% - 0.075%) = +0.325% per win. SL loss: -0.2% - 0.11% = -0.31%. Break-even win rate = 0.31 / (0.325 + 0.31) = 49%.",
-  "tp_pct":              0.004,
-  "sl_pct":              0.002,
-  "max_hold_min":        15,
+  "_comment_pos": "Native TP/SL on exchange. 5%/5% is a starting band for multi-hour swings — tune per symbol volatility.",
+  "_tp_sl_rationale": "Wider stops need longer max_hold_min. Fees are small vs 5% moves; main issue is time and path. Symmetric 5% TP/SL implies ~50% win rate before costs to break even on notional (ignoring funding).",
+  "tp_pct":              0.05,
+  "sl_pct":              0.05,
+  "max_hold_min":        720,
 
-  "_comment_size": "Notional = equity × max_risk_pct / sl_pct, capped at max_notional_usd.",
-  "_size_rationale": "Reduced max_risk_pct from 1% to 0.5% and max_notional from 200 to 100 while we validate signal quality.",
+  "_comment_size": "Notional = equity × max_risk_pct / sl_pct, capped at max_notional_usd. With sl_pct=0.05, same max_risk_pct gives smaller $ position than with tight scalps.",
+  "_size_rationale": "0.5% account risk per trade if stop is hit (notional × sl_pct ≈ equity × max_risk_pct).",
   "max_risk_pct":        0.005,
   "max_notional_usd":    100.0,
 
-  "_comment_freq": "Only 1 position at a time until signals prove reliable. cooldown_sec raised to 120s.",
-  "cooldown_sec":          120,
+  "_comment_freq": "Mid-frequency: longer cooldown and scan interval than scalp mode.",
+  "cooldown_sec":          900,
   "max_open_positions":    5,
-  "scan_interval_sec":     5.0,
+  "scan_interval_sec":     15.0,
 
-  "_comment_lev": "5x for BTC/ETH (liquid, tight spread), 3x for others.",
+  "_comment_lev": "Reduce leverage for wider stops if exchange margin is tight.",
   "leverage_default":      5,
   "symbol_leverage": {
     "BTCUSDT": 10,
@@ -42,7 +42,7 @@
 
   "max_daily_drawdown_pct": 0.02,
   "max_loss_streak":        3,
-  "loss_streak_pause_min":  2,
+  "loss_streak_pause_min":  30,
 
   "periodic_alert_min":     30,
   "daily_report_hkt_hour":  22,
@@ -53,9 +53,9 @@
   "_comment_symbols": "Bybit linear symbols for WebSocket + scanning. Path relative to this folder unless absolute.",
   "symbols_csv":            "symbol_list.csv",
 
-  "_comment_htf": "Optional extra REST gate on top of entry_mode: last CLOSED kline close vs prior must agree with entry side. 0 = off. For pure candle entries you can set 0 to avoid double-filtering; or keep 5m for alignment with higher TF.",
-  "htf_kline_minutes":      5,
-  "htf_cache_sec":          45,
+  "_comment_htf": "Extra REST kline gate on executed side. With entry_mode=both and 60m candle leg, set 0 to avoid triple-filtering the same idea; or use 240/360 for a second higher TF filter.",
+  "htf_kline_minutes":      0,
+  "htf_cache_sec":          120,
 
   "_comment_md_archive": "Bybit does not provide ~1y of historical L2/trades on the public API. Set md_record_dir to build your own dataset (JSONL) while the bot runs. Or use env MARKET_DATA_RECORD_DIR. Watch disk on busy symbols.",
   "md_record_dir":                    "",

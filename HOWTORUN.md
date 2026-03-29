@@ -230,23 +230,20 @@ run-strat experiment_v6 --once --dry-run
 # Debug logging (shows every quote, signal value, and unrealised PnL)
 run-strat experiment_v6 --debug --dry-run
 
-# ── experiment_v7 — Signal-Driven Directional Scalp (Bybit USDT-perp) ────────
+# ── experiment_v7 — Directional (live book/ticks + mid-TF candles, Bybit perp) ─
 #
-#   WHY not MM (v6)?  At Bybit VIP 0, maker fee = +0.02% (you pay, no rebate).
-#   MM round-trip = 0.04% before adverse selection.  directional scalp pays
-#   0.075% per trade but targets 0.8% TP → net +0.725% per win.
-#   Break-even win rate ≈ 41%.
+#   Default intent in params.json: **mid-term** cadence — e.g. ``entry_mode=both``,
+#   ``candle_interval_minutes`` 15–60 (REST last closed bar vs prior), **plus** live
+#   **ob_imbalance** and **trade_pressure_5m** from the WebSocket (not from 1m OHLC).
+#   Wider **tp_pct / sl_pct** (e.g. 5%) and long **max_hold_min** (hours) match
+#   slower targets; tune per symbol.
 #
-#   entry_mode (params.json):  microstructure | candles | both
-#     • microstructure — ob_imbalance AND trade_pressure_5m (WS book + 5m trade flow).
-#     • candles — direction from REST klines only: last *closed* bar vs prior
-#       (candle_interval_minutes, default 1).  candle_require_bull_body filters
-#       weak bars.  WebSocket still supplies mid for sizing.
-#     • both — same side required from micro + candles or skip.
-#   Optional: htf_kline_minutes (3 / 5 / 15 …) — extra REST gate on top.
-#   Set htf_kline_minutes to 0 to disable.  htf_cache_sec avoids spamming kline API.
-#   Execution: market order (taker, guaranteed fill).
-#   Exit: native TP + SL via set_trading_stop on exchange immediately after fill.
+#   entry_mode:  microstructure | candles | both
+#     • microstructure — WS book + 5m rolling trade flow only.
+#     • candles — REST kline direction only (interval from JSON).
+#     • both — micro and candle side must agree (recommended for L2+ticks + HTF).
+#   Optional **htf_kline_minutes** — second kline gate; often **0** when ``both``
+#   already uses a 60m candle leg.  Execution: market entry; native TP/SL on exchange.
 #
 #   Key config: strategies/experiment_v7/params.json
 #               strategies/experiment_v7/symbol_list.csv  (symbols_csv in JSON)

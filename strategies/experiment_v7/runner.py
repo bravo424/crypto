@@ -1,42 +1,40 @@
 """
-experiment_v7 — Signal-Driven Directional Scalp on Bybit USDT-perp.
+experiment_v7 — Directional Bybit USDT-perp (microstructure + optional mid-TF candles).
 
 Why not market making (v6)?
 ---------------------------
   At Bybit VIP 0, maker fee = 0.02% per side — you PAY, never receive a rebate.
   A round-trip MM trade (both sides as maker) costs 0.04% in fees, before
-  accounting for adverse selection.  The high Sharpe from the MM backtest was
-  an artefact of the fill model, not real edge.
+  adverse selection.  Directional mode pays taker on entry but can target wider
+  swings.
 
-This strategy instead:
-  1. Waits for a strong live signal from the market_data WebSocket feed:
-       - ob_imbalance AND trade_pressure_5m both agree on direction.
-     (This is not 1m REST candles; flow is a rolling window over live trades.)
-  2. Optional ``htf_kline_minutes`` (e.g. 3 or 5): REST kline gate — last
-     closed candle must close higher/lower than the prior candle to allow
-     long/short (reduces micro-structure whipsaws).
-  3. Enters with a market order (taker, 0.055%) — guarantees fill, no queue.
-  4. Immediately places native exchange TP (limit, 0.02%) + SL (market) via
-     set_trading_stop.
-  5. Polls each cycle for max-hold timeout and emergency backup SL.
+Typical profile (see params.json — tunable)
+-------------------------------------------
+  • **Live book + ticks:** order-book imbalance and rolling trade_pressure_5m
+    from the WebSocket (not from REST OHLC).
+  • **Mid-term context:** ``entry_mode=both`` with ``candle_interval_minutes``
+    e.g. 15–60: REST compares last *closed* bar vs prior; micro and candle must
+    agree.  Use ``htf_kline_minutes`` only if you want an extra kline gate.
+  • **Wider targets:** e.g. tp_pct/sl_pct ~5% and long ``max_hold_min`` so
+    trades are not cut off while waiting for a multi-hour move.
 
-Fee math per trade
-------------------
-  TP scenario (+0.8%):  0.8% − 0.055% entry − 0.02% TP exit = +0.725% net
-  SL scenario (−0.4%): −0.4% − 0.055% entry − 0.055% SL exit = −0.51% net
-  Break-even win rate ≈ 0.51 / (0.725 + 0.51) ≈ 41%
+  Enters via market order; TP/SL on exchange via set_trading_stop; loop enforces
+  max-hold and a backup SL check.
+
+Fee math (illustrative — VIP 0, ~5% TP / 5% SL targets)
+--------------------------------------------------------
+  Win:  +5% − ~0.055% entry taker − ~0.02% TP maker ≈ +4.9% price move net of fees
+        (fees are tiny vs 5% move; main risk is path / time in trade).
+  Loss: −5% − ~0.11% round-trip taker-style exits ≈ −5.1% order of magnitude.
 
 Key params (strategies/experiment_v7/params.json)
 --------------------------------------------------
-  ob_imbalance_thresh   0.25   min |ob_imbalance| to fire entry
-  pressure_thresh       0.15   min |trade_pressure_5m| to fire entry
-  tp_pct                0.008  take-profit distance from entry (0.8%)
-  sl_pct                0.004  stop-loss distance from entry   (0.4%)
-  max_hold_min          20     force-close if position held > 20 min
-  max_risk_pct          0.01   position notional = equity × max_risk_pct / sl_pct
-  max_notional_usd      200    hard cap on position size in USDT
-  cooldown_sec          60     min seconds between entries for same symbol
-  max_open_positions    3      max simultaneous open positions
+  entry_mode            both | microstructure | candles
+  candle_interval_minutes   Bybit kline TF for candle leg (1,3,5,15,30,60,…)
+  ob_imbalance_thresh, pressure_thresh   micro gates
+  tp_pct, sl_pct        e.g. 0.05 / 0.05 for mid-term swings
+  max_hold_min          force-close minutes (use hours-scale for wide TP/SL)
+  max_risk_pct          notional = equity × max_risk_pct / sl_pct (cap max_notional_usd)
 """
 from __future__ import annotations
 
@@ -77,16 +75,16 @@ class Params:
     pressure_thresh:      float = 0.15   # min |trade_pressure_5m| to enter
     require_trend_bias:   bool  = False  # if True, also require trend_bias to agree
     # ── position management ───────────────────────────────────────────────────
-    tp_pct:               float = 0.008  # take-profit at +0.8% from entry
-    sl_pct:               float = 0.004  # stop-loss   at -0.4% from entry
-    max_hold_min:         int   = 20     # force-close after 20 min
+    tp_pct:               float = 0.05   # e.g. 5% take-profit from entry
+    sl_pct:               float = 0.05   # e.g. 5% stop-loss from entry
+    max_hold_min:         int   = 720    # force-close after 12 h (widen for slow swings)
     # ── sizing ────────────────────────────────────────────────────────────────
     max_risk_pct:         float = 0.01   # risk 1% of equity per trade
     max_notional_usd:     float = 200.0  # hard cap on notional per position
     # ── frequency ─────────────────────────────────────────────────────────────
-    cooldown_sec:         int   = 60     # seconds between entries per symbol
+    cooldown_sec:         int   = 900    # 15 min between entries per symbol (mid-frequency)
     max_open_positions:   int   = 3      # simultaneous open positions cap
-    scan_interval_sec:    float = 5.0    # main loop sleep
+    scan_interval_sec:    float = 15.0   # main loop sleep
     # ── leverage & margin ─────────────────────────────────────────────────────
     leverage_default:     int   = 3
     symbol_leverage:      dict  = None   # type: ignore[assignment]
@@ -103,10 +101,10 @@ class Params:
     dry_run:                bool  = False
     symbols_csv:            str   = "symbol_list.csv"   # relative to this package dir; WS subscriptions
     # ── entry source: microstructure (WS) vs REST candles vs both must agree ──
-    entry_mode:                   str   = "microstructure"  # microstructure | candles | both
-    candle_interval_minutes:      int   = 1                 # Bybit kline interval (1, 3, 5, …)
+    entry_mode:                   str   = "both"            # microstructure | candles | both
+    candle_interval_minutes:      int   = 60                # mid-TF kline for candle leg (15/30/60 typical)
     candle_require_bull_body:     bool  = True              # Buy needs close>open on last closed bar
-    candle_cache_sec:             float = 15.0              # REST kline cache per symbol
+    candle_cache_sec:             float = 120.0             # longer cache OK for 60m bars
     reverse:                      bool  = False             # if true, flip Buy<->Sell after signal
     # ── research JSONL (one object per line; analyse with jq/pandas) ──────────
     research_jsonl_path:          str   = "research_logs/experiment_v7.jsonl"  # "" = off
