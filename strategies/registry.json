@@ -98,6 +98,18 @@
     "description": "Directional scalp driven by live WebSocket signals (ob_imbalance + trade_pressure_5m). Enters with market order when both signals agree. Native exchange TP (0.8%) + SL (0.4%) via set_trading_stop. Fee math: +0.725% net per TP win, -0.51% per SL loss, break-even win rate ≈ 41%. Cross margin, per-symbol leverage (5x BTC/ETH, 3x others). 30-min PnL+fee Telegram alerts + daily 10PM HKT summary."
   },
   {
+    "id": "orca_clmm_rust",
+    "name": "orca_clmm_rust — Orca CLMM Net-Fee Engine",
+    "type": "execution",
+    "status": "active",
+    "entry": "run-strat orca_clmm_rust --mode shadow",
+    "source": "strategies/orca_clmm_rust/runner.py",
+    "schedule": "continuous, scan interval from params.json (default 5s)",
+    "chain": "solana",
+    "venue": "orca",
+    "description": "Rust-first concentrated-liquidity engine for Orca focused on positive net fee PnL after rebalance fees, priority fees, and slippage. Supports replay -> shadow -> canary -> production promotion flow."
+  },
+  {
     "id": "experiment_v1",
     "name": "experiment_v1 — Volume-Spike Momentum",
     "type": "execution",
