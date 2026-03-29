@@ -15,8 +15,10 @@ Typical profile (see params.json — tunable)
   • **Mid-term context:** ``entry_mode=both`` with ``candle_interval_minutes``
     e.g. 15–60: REST compares last *closed* bar vs prior; micro and candle must
     agree.  Use ``htf_kline_minutes`` only if you want an extra kline gate.
-  • **Wider targets:** e.g. tp_pct/sl_pct ~5% and long ``max_hold_min`` so
-    trades are not cut off while waiting for a multi-hour move.
+  • **TP/SL:** ``tp_sl_basis`` = ``price_change`` means ``tp_pct``/``sl_pct`` are
+    **mark-price** distances (0.05 = 5% from entry).  Exchange UIs often show
+    **ROI on margin** ≈ price_move × leverage (5% price at 10× → ~50% display).
+    Use ``return_on_margin`` if you want params to mean ROI% instead.
 
   Enters via market order; TP/SL on exchange via set_trading_stop; loop enforces
   max-hold and a backup SL check.
@@ -32,7 +34,7 @@ Key params (strategies/experiment_v7/params.json)
   entry_mode            both | microstructure | candles
   candle_interval_minutes   Bybit kline TF for candle leg (1,3,5,15,30,60,…)
   ob_imbalance_thresh, pressure_thresh   micro gates
-  tp_pct, sl_pct        e.g. 0.05 / 0.05 for mid-term swings
+  tp_sl_basis, tp_pct, sl_pct   see Params
   max_hold_min          force-close minutes (use hours-scale for wide TP/SL)
   max_risk_pct          notional = equity × max_risk_pct / sl_pct (cap max_notional_usd)
 """
@@ -75,8 +77,11 @@ class Params:
     pressure_thresh:      float = 0.15   # min |trade_pressure_5m| to enter
     require_trend_bias:   bool  = False  # if True, also require trend_bias to agree
     # ── position management ───────────────────────────────────────────────────
-    tp_pct:               float = 0.05   # e.g. 5% take-profit from entry
-    sl_pct:               float = 0.05   # e.g. 5% stop-loss from entry
+    # tp_sl_basis: price_change = tp_pct/sl_pct are mark-price distance (0.05 = 5% price).
+    #   return_on_margin = same fields mean ROI on initial margin; converted via leverage.
+    tp_sl_basis:          str   = "price_change"  # price_change | return_on_margin
+    tp_pct:               float = 0.05
+    sl_pct:               float = 0.05
     max_hold_min:         int   = 720    # force-close after 12 h (widen for slow swings)
     # ── sizing ────────────────────────────────────────────────────────────────
     max_risk_pct:         float = 0.01   # risk 1% of equity per trade
@@ -140,6 +145,13 @@ def load_params() -> None:
     _p.ob_imbalance_thresh    = float(d.get("ob_imbalance_thresh",    _p.ob_imbalance_thresh))
     _p.pressure_thresh        = float(d.get("pressure_thresh",        _p.pressure_thresh))
     _p.require_trend_bias     = bool(d.get("require_trend_bias",      _p.require_trend_bias))
+    _basis_raw = str(d.get("tp_sl_basis", _p.tp_sl_basis)).strip().lower().replace("-", "_")
+    if _basis_raw in ("roi", "margin", "margin_roi"):
+        _basis_raw = "return_on_margin"
+    if _basis_raw not in ("price_change", "return_on_margin"):
+        LOGGER.warning("tp_sl_basis invalid (%r) — using price_change", d.get("tp_sl_basis"))
+        _basis_raw = "price_change"
+    _p.tp_sl_basis = _basis_raw
     _p.tp_pct                 = float(d.get("tp_pct",                 _p.tp_pct))
     _p.sl_pct                 = float(d.get("sl_pct",                 _p.sl_pct))
     _p.max_hold_min           = int(d.get("max_hold_min",             _p.max_hold_min))
@@ -248,6 +260,7 @@ def _params_research_snapshot() -> dict[str, object]:
         "candle_cache_sec": _p.candle_cache_sec,
         "htf_kline_minutes": _p.htf_kline_minutes,
         "htf_cache_sec": _p.htf_cache_sec,
+        "tp_sl_basis": _p.tp_sl_basis,
         "tp_pct": _p.tp_pct,
         "sl_pct": _p.sl_pct,
         "max_hold_min": _p.max_hold_min,
@@ -351,6 +364,23 @@ def _get_positions(session: HTTP) -> dict[str, dict]:
 
 def _get_leverage(symbol: str) -> int:
     return _p.symbol_leverage.get(symbol, _p.leverage_default)
+
+
+def _tp_sl_as_price_fractions(symbol: str) -> tuple[float, float]:
+    """Map ``tp_pct`` / ``sl_pct`` to mark-price fractions from entry.
+
+    * ``price_change`` — values *are* price distances (``0.05`` → ±5% from entry).
+      Bybit often shows **return on margin** in the UI: roughly
+      ``price_move_% × leverage`` (e.g. 5% price × 10× ≈ 50% ROI display).
+
+    * ``return_on_margin`` — values are ROI on initial margin (``0.05`` → 5% ROI);
+      converted with ``tp_pct / leverage`` (same for SL), linear perp approximation.
+    """
+    tp, sl = _p.tp_pct, _p.sl_pct
+    if _p.tp_sl_basis == "return_on_margin":
+        lev = float(max(_get_leverage(symbol), 1))
+        return tp / lev, sl / lev
+    return tp, sl
 
 
 def _setup_symbol(session: HTTP, symbol: str) -> None:
@@ -603,8 +633,9 @@ def _resolve_entry_side(session: HTTP, symbol: str, sig: MarketSignal | None,
 
 def _calc_qty(session: HTTP, symbol: str, mid: float, equity: float) -> str:
     """Position size: risk-based notional capped at max_notional_usd."""
+    _, sl_f = _tp_sl_as_price_fractions(symbol)
     notional = min(
-        equity * _p.max_risk_pct / max(_p.sl_pct, 0.0001),
+        equity * _p.max_risk_pct / max(sl_f, 0.0001),
         _p.max_notional_usd,
     )
     qty_raw = notional / mid if mid > 0 else 0.0
@@ -619,17 +650,21 @@ def _set_native_tp_sl(session: HTTP, symbol: str, st: SymbolState) -> None:
 
     is_long = st.net_pos_qty > 0
     tick    = _tick_size(session, symbol)
+    tp_f, sl_f = _tp_sl_as_price_fractions(symbol)
 
     if is_long:
-        tp = _round_price(st.entry_price * (1.0 + _p.tp_pct), tick, up=True)
-        sl = _round_price(st.entry_price * (1.0 - _p.sl_pct), tick, up=False)
+        tp = _round_price(st.entry_price * (1.0 + tp_f), tick, up=True)
+        sl = _round_price(st.entry_price * (1.0 - sl_f), tick, up=False)
     else:
-        tp = _round_price(st.entry_price * (1.0 - _p.tp_pct), tick, up=False)
-        sl = _round_price(st.entry_price * (1.0 + _p.sl_pct), tick, up=True)
+        tp = _round_price(st.entry_price * (1.0 - tp_f), tick, up=False)
+        sl = _round_price(st.entry_price * (1.0 + sl_f), tick, up=True)
 
-    LOGGER.info("%s: native TP=%s SL=%s  entry=%.4f %s",
-                symbol, tp, sl, st.entry_price,
-                "Long" if is_long else "Short")
+    LOGGER.info(
+        "%s: native TP=%s SL=%s  entry=%.4f %s  tp_sl_basis=%s  price_move tp=%.3f%% sl=%.3f%%",
+        symbol, tp, sl, st.entry_price,
+        "Long" if is_long else "Short", _p.tp_sl_basis,
+        tp_f * 100.0, sl_f * 100.0,
+    )
 
     if _p.dry_run:
         LOGGER.info("[DRY RUN] %s: would set_trading_stop TP=%s SL=%s", symbol, tp, sl)
@@ -693,7 +728,8 @@ def _manage_position(session: HTTP, symbol: str, st: SymbolState,
                           f"max-hold {age_min:.0f}m >= {_p.max_hold_min}m")
             return True
 
-    if pnl_pct <= -(_p.sl_pct * 2.0):
+    _, sl_f = _tp_sl_as_price_fractions(symbol)
+    if pnl_pct <= -(sl_f * 2.0):
         _market_close(session, symbol, st,
                       f"emergency SL pnl={pnl_pct*100:.2f}% (native stop missed)")
         return True
@@ -786,9 +822,9 @@ def main() -> None:
         symbols = _load_symbols(_sym_csv)
 
     LOGGER.info(
-        "experiment_v7 started | %d symbols | dry_run=%s | tp=%.1f%% sl=%.1f%% | "
+        "experiment_v7 started | %d symbols | dry_run=%s | tp_sl_basis=%s param_tp=%.2f%% param_sl=%.2f%% | "
         "entry_mode=%s candle_iv=%dm reverse=%s",
-        len(symbols), _p.dry_run, _p.tp_pct * 100, _p.sl_pct * 100,
+        len(symbols), _p.dry_run, _p.tp_sl_basis, _p.tp_pct * 100, _p.sl_pct * 100,
         _p.entry_mode, _p.candle_interval_minutes, _p.reverse,
     )
     if _research_path:
@@ -846,7 +882,8 @@ def main() -> None:
         try:
             alerter.send(
                 f"🟢 <b>experiment_v7</b> started\n"
-                f"{len(symbols)} symbols | tp={_p.tp_pct*100:.1f}% sl={_p.sl_pct*100:.1f}% "
+                f"{len(symbols)} symbols | tp_sl_basis={_p.tp_sl_basis} "
+                f"param tp/sl={_p.tp_pct*100:.1f}%/{_p.sl_pct*100:.1f}% "
                 f"dry_run={_p.dry_run}"
             )
         except Exception:
@@ -1127,12 +1164,18 @@ def main() -> None:
                         )
                         if alerter:
                             try:
+                                tp_f, sl_f = _tp_sl_as_price_fractions(sym)
+                                if new_qty > 0:
+                                    tp_px = st.entry_price * (1.0 + tp_f)
+                                    sl_px = st.entry_price * (1.0 - sl_f)
+                                else:
+                                    tp_px = st.entry_price * (1.0 - tp_f)
+                                    sl_px = st.entry_price * (1.0 + sl_f)
                                 alerter.send(
                                     f"{'🟢' if new_qty > 0 else '🔴'} <b>experiment_v7</b> "
                                     f"{'Long' if new_qty > 0 else 'Short'}\n"
                                     f"<b>{sym}</b>  entry={st.entry_price:.4f}\n"
-                                    f"TP={st.entry_price*(1+_p.tp_pct):.4f}  "
-                                    f"SL={st.entry_price*(1-_p.sl_pct):.4f}"
+                                    f"TP={tp_px:.4f}  SL={sl_px:.4f}"
                                 )
                             except Exception:
                                 pass

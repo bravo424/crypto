@@ -245,6 +245,11 @@ run-strat experiment_v6 --debug --dry-run
 #   Optional **htf_kline_minutes** — second kline gate; often **0** when ``both``
 #   already uses a 60m candle leg.  Execution: market entry; native TP/SL on exchange.
 #
+#   TP/SL: ``tp_sl_basis=price_change`` → ``tp_pct``/``sl_pct`` are **mark-price**
+#   % from entry (0.05 = 5%). Bybit may show **~50%** for ETH if leverage is 10× —
+#   that is ROI on margin (≈ price % × leverage), not 50% mark move. Use
+#   ``return_on_margin`` if you want JSON values to mean ROI% instead.
+#
 #   Key config: strategies/experiment_v7/params.json
 #               strategies/experiment_v7/symbol_list.csv  (symbols_csv in JSON)
 #

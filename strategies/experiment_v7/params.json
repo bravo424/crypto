@@ -16,8 +16,10 @@
   "pressure_thresh":     0.40,
   "require_trend_bias":  true,
 
-  "_comment_pos": "Native TP/SL on exchange. 5%/5% is a starting band for multi-hour swings — tune per symbol volatility.",
-  "_tp_sl_rationale": "Wider stops need longer max_hold_min. Fees are small vs 5% moves; main issue is time and path. Symmetric 5% TP/SL implies ~50% win rate before costs to break even on notional (ignoring funding).",
+  "_comment_pos": "Native TP/SL on exchange (absolute prices via set_trading_stop).",
+  "_comment_tp_sl_basis": "price_change: tp_pct/sl_pct = distance in MARK PRICE from entry (0.05 = 5% price move). Bybit often shows ~ROI on margin = roughly price_move% × leverage (e.g. 5% price × 10x ETH → ~50% in UI — not a bug). return_on_margin: 0.05 means 5% ROI on margin; bot divides by leverage to get price distance.",
+  "tp_sl_basis":         "price_change",
+  "_tp_sl_rationale": "Symmetric 5% mark move on entry; size still uses sl distance for risk. Tune per symbol.",
   "tp_pct":              0.05,
   "sl_pct":              0.05,
   "max_hold_min":        720,
