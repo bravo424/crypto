@@ -1,4 +1,4 @@
-﻿.env
+.env
 data/
 __pycache__/
 *.pyc
@@ -7,5 +7,7 @@ __pycache__/
 design/
 config/
 logs/
+strategies/experiment_v7/research_logs/
 *.egg-info/
 .vscode/
+config/solana_wallet.json

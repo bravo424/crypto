@@ -251,6 +251,12 @@ run-strat experiment_v6 --debug --dry-run
 #   Key config: strategies/experiment_v7/params.json
 #               strategies/experiment_v7/symbol_list.csv  (symbols_csv in JSON)
 #
+#   Research JSONL: params ``research_jsonl_path`` (default research_logs/… under
+#   v7 folder, gitignored). Each line is one JSON object: session_start with full
+#   param snapshot; entry / entry_skip / trade_close with features and outcomes;
+#   optional signal_snapshot when research_signal_interval_sec > 0. Analyse with
+#   jq or pandas.read_json(..., lines=True). Join trade_close.entry_id to entry.entry_id.
+#
 #   Leverage: 5× for BTCUSDT/ETHUSDT, 3× for all others. Cross margin.
 #   Position size: equity × max_risk_pct / sl_pct, capped at max_notional_usd.
 

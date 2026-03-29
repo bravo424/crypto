@@ -47,6 +47,7 @@ import os
 import signal
 import threading
 import time
+import uuid
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from pathlib import Path
@@ -107,6 +108,9 @@ class Params:
     candle_require_bull_body:     bool  = True              # Buy needs close>open on last closed bar
     candle_cache_sec:             float = 15.0              # REST kline cache per symbol
     reverse:                      bool  = False             # if true, flip Buy<->Sell after signal
+    # ── research JSONL (one object per line; analyse with jq/pandas) ──────────
+    research_jsonl_path:          str   = "research_logs/experiment_v7.jsonl"  # "" = off
+    research_signal_interval_sec: float = 0.0            # >0 = periodic signal_snapshot per symbol
     # ── optional HTF kline gate (REST) on top of chosen entry_mode ───────────
     htf_kline_minutes:      int   = 0     # 0 = off; 3, 5, or 15 = Bybit kline interval
     htf_cache_sec:          float = 45.0  # min seconds between kline fetches per symbol
@@ -123,6 +127,11 @@ _htf_cache: dict[str, tuple[float, str | None]] = {}
 
 # Candle-entry cache: symbol -> (monotonic_ts, "Buy"|"Sell"|None)
 _candle_entry_cache: dict[str, tuple[float, str | None]] = {}
+
+# Research JSONL (append-only); set by _research_init
+_research_lock = threading.Lock()
+_research_path: Path | None = None
+_research_signal_last_mono: dict[str, float] = {}
 
 
 def load_params() -> None:
@@ -157,6 +166,9 @@ def load_params() -> None:
     _p.candle_require_bull_body = bool(d.get("candle_require_bull_body", _p.candle_require_bull_body))
     _p.candle_cache_sec       = float(d.get("candle_cache_sec",           _p.candle_cache_sec))
     _p.reverse                = bool(d.get("reverse",                    _p.reverse))
+    _p.research_jsonl_path    = str(d.get("research_jsonl_path",        _p.research_jsonl_path))
+    _p.research_signal_interval_sec = float(
+        d.get("research_signal_interval_sec", _p.research_signal_interval_sec))
     _p.htf_kline_minutes      = int(d.get("htf_kline_minutes",        _p.htf_kline_minutes))
     _p.htf_cache_sec          = float(d.get("htf_cache_sec",            _p.htf_cache_sec))
     _p.md_record_dir          = str(d.get("md_record_dir",              _p.md_record_dir))
@@ -176,6 +188,77 @@ class SymbolState:
         self.entry_price:     float           = 0.0
         self.position_open_ts: datetime | None = None
         self.last_entry_ts:   datetime | None  = None  # for cooldown
+        self.research_entry_id: str | None = None       # correlates entry → trade_close in JSONL
+
+
+def _research_init() -> None:
+    """Resolve JSONL path under strategies/experiment_v7/ unless absolute; empty = disabled."""
+    global _research_path
+    raw = (_p.research_jsonl_path or "").strip()
+    if not raw:
+        _research_path = None
+        return
+    path = Path(raw)
+    if not path.is_absolute():
+        path = HERE / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _research_path = path
+
+
+def _research_emit(event: str, **fields: object) -> None:
+    if _research_path is None:
+        return
+    row: dict[str, object] = {
+        "ts_utc": datetime.now(tz=UTC).isoformat(),
+        "strategy": "experiment_v7",
+        "event": event,
+    }
+    for k, v in fields.items():
+        if isinstance(v, datetime):
+            row[k] = v.isoformat()
+        else:
+            row[k] = v
+    line = json.dumps(row, ensure_ascii=False, default=str) + "\n"
+    with _research_lock:
+        with _research_path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+
+
+def _signal_features_dict(sig: MarketSignal) -> dict[str, object]:
+    return {
+        "sig_ts_unix": sig.ts,
+        "mid": sig.mid,
+        "bid": sig.bid,
+        "ask": sig.ask,
+        "spread_pct": sig.spread_pct,
+        "ob_imbalance": sig.ob_imbalance,
+        "trade_pressure_30s": sig.trade_pressure_30s,
+        "trade_pressure_5m": sig.trade_pressure_5m,
+        "trend_bias": sig.trend_bias,
+    }
+
+
+def _params_research_snapshot() -> dict[str, object]:
+    return {
+        "entry_mode": _p.entry_mode,
+        "reverse": _p.reverse,
+        "ob_imbalance_thresh": _p.ob_imbalance_thresh,
+        "pressure_thresh": _p.pressure_thresh,
+        "require_trend_bias": _p.require_trend_bias,
+        "candle_interval_minutes": _p.candle_interval_minutes,
+        "candle_require_bull_body": _p.candle_require_bull_body,
+        "candle_cache_sec": _p.candle_cache_sec,
+        "htf_kline_minutes": _p.htf_kline_minutes,
+        "htf_cache_sec": _p.htf_cache_sec,
+        "tp_pct": _p.tp_pct,
+        "sl_pct": _p.sl_pct,
+        "max_hold_min": _p.max_hold_min,
+        "max_risk_pct": _p.max_risk_pct,
+        "max_notional_usd": _p.max_notional_usd,
+        "cooldown_sec": _p.cooldown_sec,
+        "max_open_positions": _p.max_open_positions,
+        "dry_run": _p.dry_run,
+    }
 
 
 # ── instrument helpers ────────────────────────────────────────────────────────
@@ -393,24 +476,36 @@ def _get_htf_momentum_side(session: HTTP, symbol: str) -> str | None:
         return None
 
 
-def _htf_gate_allows(session: HTTP, symbol: str, side: str, mono_t: float) -> bool:
-    """True if HTF gate is off, or REST kline momentum agrees with ``side``."""
+def _htf_gate_detail(session: HTTP, symbol: str, side: str, mono_t: float) -> tuple[bool, dict[str, object]]:
+    """Whether HTF allows ``side``, plus fields for research JSONL."""
+    detail: dict[str, object] = {"htf_kline_minutes": _p.htf_kline_minutes}
     if _p.htf_kline_minutes <= 0:
-        return True
+        detail["htf_gate"] = "off"
+        return True, detail
     global _htf_cache
     ent = _htf_cache.get(symbol)
     if ent is not None and (mono_t - ent[0]) < _p.htf_cache_sec:
         htf = ent[1]
+        detail["htf_cached"] = True
     else:
         htf = _get_htf_momentum_side(session, symbol)
         _htf_cache[symbol] = (mono_t, htf)
+        detail["htf_cached"] = False
+    detail["htf_momentum"] = htf
     if htf is None:
+        detail["htf_gate"] = "neutral"
         LOGGER.debug("%s: HTF gate — neutral/chop (no entry)", symbol)
-        return False
+        return False, detail
     ok = (side == "Buy" and htf == "Buy") or (side == "Sell" and htf == "Sell")
+    detail["htf_gate"] = "ok" if ok else "mismatch"
     if not ok:
         LOGGER.debug("%s: HTF gate — block %s (HTF momentum=%s)", symbol, side, htf)
-    return ok
+    return ok, detail
+
+
+def _htf_gate_allows(session: HTTP, symbol: str, side: str, mono_t: float) -> bool:
+    """True if HTF gate is off, or REST kline momentum agrees with ``side``."""
+    return _htf_gate_detail(session, symbol, side, mono_t)[0]
 
 
 def _parse_kline_open_close(row: object) -> tuple[float, float]:
@@ -477,8 +572,8 @@ def _candle_entry_cached(session: HTTP, symbol: str, mono_t: float) -> str | Non
 
 
 def _resolve_entry_side(session: HTTP, symbol: str, sig: MarketSignal | None,
-                        mono_t: float) -> tuple[str | None, str]:
-    """Returns (side, reason_tag) for logging."""
+                        mono_t: float) -> tuple[str | None, str, dict[str, str | None]]:
+    """Returns (resolved_side, reason_tag, detail) with micro_side / candle_side for research."""
     mode = _p.entry_mode
     side_micro: str | None = None
     side_candle: str | None = None
@@ -488,20 +583,22 @@ def _resolve_entry_side(session: HTTP, symbol: str, sig: MarketSignal | None,
     if mode in ("candles", "both"):
         side_candle = _candle_entry_cached(session, symbol, mono_t)
 
+    detail: dict[str, str | None] = {"micro_side": side_micro, "candle_side": side_candle}
+
     if mode == "microstructure":
-        return side_micro, "micro"
+        return side_micro, "micro", detail
     if mode == "candles":
-        return side_candle, "candle"
+        return side_candle, "candle", detail
     # both
     if side_micro is None or side_candle is None:
-        return None, "both-partial"
+        return None, "both-partial", detail
     if side_micro != side_candle:
         LOGGER.debug(
             "%s: entry_mode both — disagree micro=%s candle=%s",
             symbol, side_micro, side_candle,
         )
-        return None, "both-mismatch"
-    return side_micro, "both"
+        return None, "both-mismatch", detail
+    return side_micro, "both", detail
 
 
 # ── position management ───────────────────────────────────────────────────────
@@ -641,6 +738,10 @@ def main() -> None:
 
     if args.dry_run:
         _p.dry_run = True
+    if args.reverse:
+        _p.reverse = True
+
+    _research_init()
 
     settings = load_settings()
     session  = HTTP(
@@ -691,6 +792,16 @@ def main() -> None:
         "entry_mode=%s candle_iv=%dm reverse=%s",
         len(symbols), _p.dry_run, _p.tp_pct * 100, _p.sl_pct * 100,
         _p.entry_mode, _p.candle_interval_minutes, _p.reverse,
+    )
+    if _research_path:
+        LOGGER.info("Research JSONL → %s (signal_snapshot every %.0fs if >0)",
+                    _research_path, _p.research_signal_interval_sec)
+    _research_emit(
+        "session_start",
+        symbols=symbols,
+        research_log=str(_research_path) if _research_path else "",
+        research_signal_interval_sec=_p.research_signal_interval_sec,
+        **_params_research_snapshot(),
     )
 
     # ── setup leverage & margin per symbol ────────────────────────────────────
@@ -945,6 +1056,26 @@ def main() -> None:
                         loss_streak if not won else 0,
                     )
 
+                    _close_rid = None
+                    if cpnl_record:
+                        _close_rid = cpnl_record.get("orderId") or cpnl_record.get("id")
+                    _research_emit(
+                        "trade_close",
+                        symbol=sym,
+                        entry_id=st.research_entry_id,
+                        position_side=old_side,
+                        entry_price=old_entry,
+                        exit_price=exit_price,
+                        realized_pnl_usdt=realized_pnl,
+                        won=won,
+                        pnl_pct=pnl_pct,
+                        hold_min=age_min,
+                        fees_usdt=close_fee,
+                        close_record_id=_close_rid,
+                        pnl_source="bybit_closed_pnl" if cpnl_record else "mark_estimate",
+                    )
+                    st.research_entry_id = None
+
                     # Send close notification to position_alerter
                     if position_alerter:
                         try:
@@ -1046,6 +1177,33 @@ def main() -> None:
                     st  = states[sym]
                     sig = store.get(sym)
 
+                    if _research_path and _p.research_signal_interval_sec > 0:
+                        mono_snap = time.monotonic()
+                        last_sn = _research_signal_last_mono.get(sym, 0.0)
+                        if mono_snap - last_sn >= _p.research_signal_interval_sec:
+                            _research_signal_last_mono[sym] = mono_snap
+                            if sig is None or sig.mid <= 0:
+                                _research_emit(
+                                    "signal_snapshot",
+                                    symbol=sym,
+                                    in_position=st.net_pos_qty != 0.0,
+                                    net_pos_qty=st.net_pos_qty,
+                                    error="no_md",
+                                )
+                            else:
+                                side_rs, tag_rs, det_rs = _resolve_entry_side(
+                                    session, sym, sig, mono_snap)
+                                _research_emit(
+                                    "signal_snapshot",
+                                    symbol=sym,
+                                    resolved_side=side_rs,
+                                    entry_tag=tag_rs,
+                                    in_position=st.net_pos_qty != 0.0,
+                                    net_pos_qty=st.net_pos_qty,
+                                    **det_rs,
+                                    **_signal_features_dict(sig),
+                                )
+
                     if sig is None or sig.mid <= 0:
                         LOGGER.debug("%s: no market data — skip", sym)
                         continue
@@ -1062,7 +1220,7 @@ def main() -> None:
                             continue
 
                     mono = time.monotonic()
-                    side, _entry_tag = _resolve_entry_side(session, sym, sig, mono)
+                    side, _entry_tag, side_detail = _resolve_entry_side(session, sym, sig, mono)
                     if side is None:
                         if _p.entry_mode == "microstructure":
                             LOGGER.debug(
@@ -1080,15 +1238,41 @@ def main() -> None:
                     if _p.reverse:
                         side = "Sell" if side == "Buy" else "Buy"
 
-                    if not _htf_gate_allows(session, sym, side, mono):
+                    htf_ok, htf_detail = _htf_gate_detail(session, sym, side, mono)
+                    if not htf_ok:
+                        _research_emit(
+                            "entry_skip",
+                            reason="htf_gate",
+                            symbol=sym,
+                            signal_side=signal_side,
+                            executed_side=side,
+                            entry_tag=_entry_tag,
+                            reverse_applied=_p.reverse,
+                            **side_detail,
+                            **htf_detail,
+                            **_signal_features_dict(sig),
+                        )
                         continue
 
                     # Size the order
                     qty_str = _calc_qty(session, sym, sig.mid, equity)
                     if float(qty_str) <= 0:
+                        _research_emit(
+                            "entry_skip",
+                            reason="qty_zero",
+                            symbol=sym,
+                            equity=equity,
+                            signal_side=signal_side,
+                            executed_side=side,
+                            entry_tag=_entry_tag,
+                            **side_detail,
+                            **htf_detail,
+                            **_signal_features_dict(sig),
+                        )
                         LOGGER.warning("%s: computed qty=0 — skip (equity=%.2f)", sym, equity)
                         continue
 
+                    entry_id = str(uuid.uuid4())
                     rev_note = (
                         f" (signal={signal_side})" if _p.reverse else ""
                     )
@@ -1098,7 +1282,24 @@ def main() -> None:
                         sig.ob_imbalance, sig.trade_pressure_5m, sig.trend_bias,
                     )
 
+                    entry_row: dict[str, object] = {
+                        "entry_id": entry_id,
+                        "symbol": sym,
+                        "signal_side": signal_side,
+                        "executed_side": side,
+                        "reverse_applied": _p.reverse,
+                        "entry_tag": _entry_tag,
+                        "equity": equity,
+                        "qty": qty_str,
+                        "dry_run": _p.dry_run,
+                        **side_detail,
+                        **htf_detail,
+                        **_signal_features_dict(sig),
+                    }
+
                     if _p.dry_run:
+                        _research_emit("entry", **entry_row)
+                        st.research_entry_id = entry_id
                         LOGGER.info("[DRY RUN] %s: would place Market %s qty=%s",
                                     sym, side, qty_str)
                         st.last_entry_ts = now
@@ -1113,10 +1314,18 @@ def main() -> None:
                             side=side, orderType="Market",
                             qty=qty_str, timeInForce="IOC",
                         )
+                        _research_emit("entry", **entry_row)
+                        st.research_entry_id = entry_id
                         st.last_entry_ts = now
                         open_count += 1
                         LOGGER.info("%s: Market %s order sent qty=%s", sym, side, qty_str)
                     except Exception as exc:
+                        _research_emit(
+                            "entry_skip",
+                            reason="order_failed",
+                            error=str(exc),
+                            **entry_row,
+                        )
                         LOGGER.error("%s: entry order failed: %s", sym, exc)
 
                     if open_count >= _p.max_open_positions:
@@ -1142,6 +1351,7 @@ def main() -> None:
             except Exception:
                 pass
     finally:
+        _research_emit("session_stop", clean_shutdown=_clean_exit)
         _cancel_all(session)
         md.stop_market_data()
         LOGGER.info("experiment_v7 stopped.")

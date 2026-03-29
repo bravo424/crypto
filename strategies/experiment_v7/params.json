@@ -59,5 +59,9 @@
 
   "_comment_md_archive": "Bybit does not provide ~1y of historical L2/trades on the public API. Set md_record_dir to build your own dataset (JSONL) while the bot runs. Or use env MARKET_DATA_RECORD_DIR. Watch disk on busy symbols.",
   "md_record_dir":                    "",
-  "md_book_snapshot_interval_sec":    2.0
+  "md_book_snapshot_interval_sec":    2.0,
+
+  "_comment_research": "Append-only JSONL (one JSON object per line) under this strategy folder unless path is absolute. Set research_jsonl_path to \"\" to disable. Events: session_start/stop, entry, entry_skip (htf_gate|qty_zero|order_failed), trade_close (join on entry_id), optional signal_snapshot if research_signal_interval_sec > 0 (adds REST in candle/both modes).",
+  "research_jsonl_path":            "research_logs/experiment_v7.jsonl",
+  "research_signal_interval_sec":  0
 }
