@@ -10,4 +10,19 @@ logs/
 strategies/experiment_v7/research_logs/
 *.egg-info/
 .vscode/
-config/solana_wallet.json
+
+# Explicit credential / secret patterns (never commit, even if config/ rule is weakened)
+config/**
+!config/.gitkeep
+**/*credentials*.csv
+**/bybit*.csv
+**/bithumb*.csv
+**/upbit*.csv
+**/nasang_bot_token
+**/position_bot_token
+**/sra_strat_power_bot_token
+**/solana_wallet.json
+**/*_bot_token
+**/*wallet*.json
+.env.*
+!.env.example
